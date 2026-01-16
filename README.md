@@ -68,7 +68,7 @@ Once you have your patched binary up and running, you can now upload license fil
 
 If you want to create your own license, you can modify the example.json file and customize it to your liking. By default, it enables all features and gives you an Enterprise Advanced license. You can specify any customer details you want.
 
-> Make sure to use IDs consisting of exactly 26 characters of only letters and numbers [A-Za-z0-9].
+> Make sure to use IDs consisting of [exactly 26 characters of only letters and numbers](https://github.com/mattermost/mattermost/blob/f00dd11e340cda3c8b9d13cb869db1fcd085580c/server/public/model/utils.go#L764-L776) [A-Za-z0-9].
 
 The 256 x's at the end of the json object is the signature. Since the patched binary now allows invalid signatures, you can put whatever you want in here, or leave it as is. Just make sure that the signature comes right after the json object and is exactly 256 characters in length.
 
