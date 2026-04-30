@@ -31,7 +31,24 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
         echo "  - $dep"
     done
     echo "Please install them and try again."
-    exit 1
+    exit 2
+fi
+
+# Check binary file argument exists and is writable
+if [ -z "$BINARY_FILE" ]; then
+    echo "Error: No binary file specified."
+    echo "Usage: $0 <binary_file>"
+    exit 3
+fi
+
+if [ ! -f "$BINARY_FILE" ]; then
+    echo "Error: File '$BINARY_FILE' does not exist."
+    exit 4
+fi
+
+if [ ! -w "$BINARY_FILE" ]; then
+    echo "Error: No write permission for '$BINARY_FILE'."
+    exit 5
 fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
@@ -65,7 +82,7 @@ echo "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.Validate
 PATCHED_COUNT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null | wc -l)
 if [ "$PATCHED_COUNT" -gt 0 ]; then
     echo "Binary appears to already be patched (jnz instruction found)."
-    exit 1
+    exit 6
 fi
 
 MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l)
@@ -79,7 +96,7 @@ FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}'
 
 if [ -z "$FOUND_OFFSET" ]; then
   echo "Call not found!"
-  exit 1
+  exit 7
 fi
 
 BYTE_OFFSET=$((FOUND_OFFSET / 2 + OFFSET))
@@ -87,21 +104,21 @@ BYTE_OFFSET_HEX=$(printf "%x" "$BYTE_OFFSET")
 
 if [ "$BYTE_OFFSET" -lt 0 ]; then
   echo "Error: Calculated offset is before the start of the file!"
-  exit 1
+  exit 8
 fi
 
 echo "Call found, patching jz at offset 0x$BYTE_OFFSET_HEX with jnz"
 
 if ! printf "$REPLACEMENT" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1; then
     echo "Error: Failed to write patch to '$BINARY_FILE'."
-    exit 1
+    exit 9
 fi
 
 # Verify the patch was applied
 WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null | xxd -p)
 if [ "$WRITTEN_BYTE" != "$REPLACEMENT" ]; then
     echo "Error: Patch verification failed! Expected '$REPLACEMENT' but found '$WRITTEN_BYTE' at offset 0x$BYTE_OFFSET_HEX."
-    exit 1
+    exit 10
 fi
 
 echo "Licensing code patched!"
