@@ -16,7 +16,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Check for required dependencies
-DEPENDENCIES=(hexdump xxd grep awk dd tr mktemp)
+DEPENDENCIES=(hexdump xxd grep awk dd tr mktemp file)
 MISSING_DEPS=()
 
 for dep in "${DEPENDENCIES[@]}"; do
@@ -49,6 +49,13 @@ fi
 if [ ! -w "$BINARY_FILE" ]; then
     echo "Error: No write permission for '$BINARY_FILE'."
     exit 5
+fi
+
+# Check if file is an ELF binary
+FILE_TYPE=$(file -b "$BINARY_FILE" 2>/dev/null || echo "unknown")
+if ! echo "$FILE_TYPE" | grep -q "ELF"; then
+    echo "Error: '$BINARY_FILE' does not appear to be an ELF binary (detected: $FILE_TYPE)."
+    exit 11
 fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
