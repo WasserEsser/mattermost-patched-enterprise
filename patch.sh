@@ -60,6 +60,13 @@ hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"
 
 echo "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.ValidateLicense()"
 
+MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l)
+if [ "$MATCH_COUNT" -gt 1 ]; then
+    echo "Warning: Found $MATCH_COUNT matches for the pattern. Using the first match."
+    echo "If patching fails or produces unexpected results, please report this at:"
+    echo "  https://github.com/<your-repo>/issues"
+fi
+
 FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}' | head -n 1)
 
 if [ -z "$FOUND_OFFSET" ]; then
