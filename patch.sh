@@ -5,8 +5,17 @@ PATTERN="48 89 C1 48 8B 84 24 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 74 53"
 REPLACEMENT="75"
 OFFSET=19
 
+# Setup cleanup for temp files
+TEMP_FILE=""
+cleanup() {
+    if [ -n "$TEMP_FILE" ] && [ -f "$TEMP_FILE" ]; then
+        rm -f "$TEMP_FILE"
+    fi
+}
+trap cleanup EXIT
+
 # Check for required dependencies
-DEPENDENCIES=(hexdump xxd grep awk dd tr)
+DEPENDENCIES=(hexdump xxd grep awk dd tr mktemp)
 MISSING_DEPS=()
 
 for dep in "${DEPENDENCIES[@]}"; do
@@ -45,15 +54,15 @@ fi
 
 echo "Dumping hexcode of original binary"
 
-hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > temp_hex_dump
+TEMP_FILE=$(mktemp)
+hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"
 
 echo "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.ValidateLicense()"
 
-FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" temp_hex_dump | awk -F: '{print $1}' | head -n 1)
+FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}' | head -n 1)
 
 if [ -z "$FOUND_OFFSET" ]; then
   echo "Call not found!"
-  rm temp_hex_dump
   exit 1
 fi
 
@@ -62,7 +71,6 @@ BYTE_OFFSET_HEX=$(printf "%x" "$BYTE_OFFSET")
 
 if [ "$BYTE_OFFSET" -lt 0 ]; then
   echo "Error: Calculated offset is before the start of the file!"
-  rm temp_hex_dump
   exit 1
 fi
 
@@ -70,11 +78,8 @@ echo "Call found, patching jz at offset 0x$BYTE_OFFSET_HEX with jnz"
 
 if ! printf "$REPLACEMENT" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1; then
     echo "Error: Failed to write patch to '$BINARY_FILE'."
-    rm temp_hex_dump
     exit 1
 fi
-
-rm temp_hex_dump
 
 # Verify the patch was applied
 WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null | xxd -p)
