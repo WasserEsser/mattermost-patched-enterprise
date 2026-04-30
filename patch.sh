@@ -35,6 +35,7 @@ if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
 fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
+PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/74 53/75 53/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
 # Check binary file argument exists and is writable
 if [ -z "$BINARY_FILE" ]; then
@@ -59,6 +60,13 @@ TEMP_FILE=$(mktemp)
 hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"
 
 echo "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.ValidateLicense()"
+
+# Check if already patched
+PATCHED_COUNT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null | wc -l)
+if [ "$PATCHED_COUNT" -gt 0 ]; then
+    echo "Binary appears to already be patched (jnz instruction found)."
+    exit 1
+fi
 
 MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l)
 if [ "$MATCH_COUNT" -gt 1 ]; then
