@@ -123,7 +123,10 @@ if [ ! -w "$BINARY_FILE" ]; then
 fi
 
 # Check if file is an ELF binary
-FILE_TYPE=$(file -b "$BINARY_FILE" 2>/dev/null || echo "unknown")
+FILE_TYPE=$(file -b "$BINARY_FILE") || {
+    echo "Error: Unable to determine file type for '$BINARY_FILE'." >&2
+    exit 1
+}
 if ! echo "$FILE_TYPE" | grep -q "ELF"; then
     echo "Error: '$BINARY_FILE' does not appear to be an ELF binary (detected: $FILE_TYPE)." >&2
     exit 11
@@ -132,45 +135,54 @@ fi
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/74 53/75 53/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
-# Check binary file argument exists and is writable
-if [ -z "$BINARY_FILE" ]; then
-    echo "Error: No binary file specified."
-    echo "Usage: $0 <binary_file>"
-    exit 1
-fi
-
-if [ ! -f "$BINARY_FILE" ]; then
-    echo "Error: File '$BINARY_FILE' does not exist."
-    exit 1
-fi
-
-if [ ! -w "$BINARY_FILE" ]; then
-    echo "Error: No write permission for '$BINARY_FILE'."
-    exit 1
-fi
-
 log "Dumping hexcode of original binary"
 
 TEMP_FILE=$(mktemp)
-hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"
+hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE" || {
+    echo "Error: Failed to read binary file '$BINARY_FILE'." >&2
+    exit 1
+}
+# Verify temp file has content
+if [ ! -s "$TEMP_FILE" ]; then
+    echo "Error: Failed to extract hex data from binary (empty output)." >&2
+    exit 1
+fi
 
 log "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.ValidateLicense()"
 
-# Check if already patched
-PATCHED_COUNT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null | wc -l || true)
-if [ "$PATCHED_COUNT" -gt 0 ]; then
+# Check if already patched (grep returns 1 for no matches, which is OK; only exit 2 is an error)
+PATCHED_OUTPUT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null) || {
+    GREP_EXIT=$?
+    # Exit code 1 means no matches found (OK), exit code 2 means actual error
+    if [ "$GREP_EXIT" -eq 2 ]; then
+        echo "Error: Failed to search for existing patch pattern in binary." >&2
+        exit 1
+    fi
+}
+# Check if output is non-empty (wc -l on empty string returns 1, not 0)
+if [ -n "$PATCHED_OUTPUT" ]; then
     log "Binary appears to already be patched (jnz instruction found)."
     exit 6
 fi
 
-MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l || true)
+# Search for pattern to patch (grep returns 1 for no matches, which is handled below)
+MATCH_OUTPUT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" 2>/dev/null) || {
+    GREP_EXIT=$?
+    # Exit code 1 means no matches found (handled below), exit code 2 means actual error
+    if [ "$GREP_EXIT" -eq 2 ]; then
+        echo "Error: Failed to search for patch pattern in binary." >&2
+        exit 1
+    fi
+}
+# Count matches (wc -l on empty string returns 1, use grep -c instead)
+MATCH_COUNT=$(echo "$MATCH_OUTPUT" | grep -c .)
 if [ "$MATCH_COUNT" -gt 1 ]; then
     log "Warning: Found $MATCH_COUNT matches for the pattern. Using the first match."
     log "If patching fails or produces unexpected results, please report this at:"
     log "  https://github.com/<your-repo>/issues"
 fi
 
-FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}' | head -n 1 || true)
+FOUND_OFFSET=$(echo "$MATCH_OUTPUT" | awk -F: '{print $1}' | head -n 1)
 
 if [ -z "$FOUND_OFFSET" ]; then
   echo "Call not found!" >&2
@@ -199,7 +211,10 @@ if ! printf "$REPLACEMENT" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_O
 fi
 
 # Verify the patch was applied
-WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null | xxd -p)
+WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null | xxd -p) || {
+    echo "Error: Failed to read back patched byte at offset 0x$BYTE_OFFSET_HEX for verification." >&2
+    exit 1
+}
 if [ "$WRITTEN_BYTE" != "$REPLACEMENT" ]; then
     echo "Error: Patch verification failed! Expected '$REPLACEMENT' but found '$WRITTEN_BYTE' at offset 0x$BYTE_OFFSET_HEX." >&2
     exit 10
