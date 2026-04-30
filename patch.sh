@@ -157,20 +157,20 @@ hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"
 log "Searching for rsa.VerifyPKCS1v15 call inside LicenseValidatorImpl.ValidateLicense()"
 
 # Check if already patched
-PATCHED_COUNT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null | wc -l)
+PATCHED_COUNT=$(grep -Eo -b "$PATCHED_PATTERN" "$TEMP_FILE" 2>/dev/null | wc -l || true)
 if [ "$PATCHED_COUNT" -gt 0 ]; then
     log "Binary appears to already be patched (jnz instruction found)."
     exit 6
 fi
 
-MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l)
+MATCH_COUNT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | wc -l || true)
 if [ "$MATCH_COUNT" -gt 1 ]; then
     log "Warning: Found $MATCH_COUNT matches for the pattern. Using the first match."
     log "If patching fails or produces unexpected results, please report this at:"
     log "  https://github.com/<your-repo>/issues"
 fi
 
-FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}' | head -n 1)
+FOUND_OFFSET=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" | awk -F: '{print $1}' | head -n 1 || true)
 
 if [ -z "$FOUND_OFFSET" ]; then
   echo "Call not found!" >&2
