@@ -5,6 +5,25 @@ PATTERN="48 89 C1 48 8B 84 24 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 74 53"
 REPLACEMENT="75"
 OFFSET=19
 
+# Check for required dependencies
+DEPENDENCIES=(hexdump xxd grep awk dd tr)
+MISSING_DEPS=()
+
+for dep in "${DEPENDENCIES[@]}"; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+        MISSING_DEPS+=("$dep")
+    fi
+done
+
+if [ ${#MISSING_DEPS[@]} -gt 0 ]; then
+    echo "Error: The following required commands are not installed:"
+    for dep in "${MISSING_DEPS[@]}"; do
+        echo "  - $dep"
+    done
+    echo "Please install them and try again."
+    exit 1
+fi
+
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
 echo "Dumping hexcode of original binary"
