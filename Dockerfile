@@ -1,7 +1,7 @@
 FROM mattermost/mattermost-enterprise-edition:release-11 AS original
 
 FROM alpine:latest AS patcher
-RUN apk add --no-cache bash xxd grep 
+RUN apk add --no-cache bash xxd grep gawk util-linux file
 
 COPY --from=original /mattermost/bin/mattermost /mattermost
 
