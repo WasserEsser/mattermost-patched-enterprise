@@ -26,6 +26,23 @@ fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
+# Check binary file argument exists and is writable
+if [ -z "$BINARY_FILE" ]; then
+    echo "Error: No binary file specified."
+    echo "Usage: $0 <binary_file>"
+    exit 1
+fi
+
+if [ ! -f "$BINARY_FILE" ]; then
+    echo "Error: File '$BINARY_FILE' does not exist."
+    exit 1
+fi
+
+if [ ! -w "$BINARY_FILE" ]; then
+    echo "Error: No write permission for '$BINARY_FILE'."
+    exit 1
+fi
+
 echo "Dumping hexcode of original binary"
 
 hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > temp_hex_dump
@@ -51,8 +68,19 @@ fi
 
 echo "Call found, patching jz at offset 0x$BYTE_OFFSET_HEX with jnz"
 
-printf "$REPLACEMENT" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1
+if ! printf "$REPLACEMENT" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1; then
+    echo "Error: Failed to write patch to '$BINARY_FILE'."
+    rm temp_hex_dump
+    exit 1
+fi
 
 rm temp_hex_dump
+
+# Verify the patch was applied
+WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null | xxd -p)
+if [ "$WRITTEN_BYTE" != "$REPLACEMENT" ]; then
+    echo "Error: Patch verification failed! Expected '$REPLACEMENT' but found '$WRITTEN_BYTE' at offset 0x$BYTE_OFFSET_HEX."
+    exit 1
+fi
 
 echo "Licensing code patched!"
