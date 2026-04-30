@@ -79,3 +79,7 @@ You can now upload your license in your system console or your environment varia
 # Important Note
 
 If you are not using your own image that is built upon bringing your container up or have automated the process, you will have to repeat the steps to patch the binary on every update. You will not have to create or upload new licenses.
+
+# AI Disclaimer
+
+Starting with `08edabd`, AI (Kimi 2.5) was used to improve the script and reviewed by a human. The patch itself, aka what needs to be patched, is still done and verified by a human. 
