@@ -179,7 +179,7 @@ MATCH_COUNT=$(echo "$MATCH_OUTPUT" | grep -c .)
 if [ "$MATCH_COUNT" -gt 1 ]; then
     log "Warning: Found $MATCH_COUNT matches for the pattern. Using the first match."
     log "If patching fails or produces unexpected results, please report this at:"
-    log "  https://github.com/<your-repo>/issues"
+    log "  https://github.com/WasserEsser/mattermost-patched-enterprise/issues"
 fi
 
 FOUND_OFFSET=$(echo "$MATCH_OUTPUT" | awk -F: '{print $1}' | head -n 1)
