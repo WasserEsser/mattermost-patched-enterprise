@@ -73,9 +73,9 @@ log() {
         echo "$@"
     fi
 }
-PATTERN="48 89 C1 48 8B 84 24 ?? ?? ?? ?? E8 ?? ?? ?? ?? 48 85 C0 74 53"
+PATTERN="48 85 C0 0F 84 81 00 00 00 44 0F 11 BC 24 78 01 00 00"
 REPLACEMENT="75"
-OFFSET=19
+OFFSET=1
 
 # Setup cleanup for temp files
 TEMP_FILE=""
@@ -133,7 +133,7 @@ if ! echo "$FILE_TYPE" | grep -q "ELF"; then
 fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
-PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/74 53/75 53/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
+PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/84 81/55 81/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
 log "Dumping hexcode of original binary"
 
@@ -174,8 +174,9 @@ MATCH_OUTPUT=$(grep -Eo -b "$SEARCH_PATTERN" "$TEMP_FILE" 2>/dev/null) || {
         exit 1
     fi
 }
-# Count matches (wc -l on empty string returns 1, use grep -c instead)
-MATCH_COUNT=$(echo "$MATCH_OUTPUT" | grep -c .)
+# Count matches (grep -c exits 1 on zero matches, which set -e would treat as
+# fatal; fall back to 0 so we reach the "Call not found!" check below)
+MATCH_COUNT=$(echo "$MATCH_OUTPUT" | grep -c .) || MATCH_COUNT=0
 if [ "$MATCH_COUNT" -gt 1 ]; then
     log "Warning: Found $MATCH_COUNT matches for the pattern. Using the first match."
     log "If patching fails or produces unexpected results, please report this at:"
