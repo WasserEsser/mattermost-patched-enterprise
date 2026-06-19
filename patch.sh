@@ -73,9 +73,9 @@ log() {
         echo "$@"
     fi
 }
-PATTERN="48 85 C0 0F 84 81 00 00 00 44 0F 11 BC 24 78 01 00 00"
-REPLACEMENT="75"
-OFFSET=1
+PATTERN="48 85 C0 0F 84 ?? ?? ?? ?? 44 0F 11 BC 24 ?? ?? ?? ?? 74 04 48 8B 40 08 48 89 84 24 ?? ?? ?? ?? 48 89 9C 24 ?? ?? ?? ?? 48 8D 05 ?? ?? ?? ?? BB 15 00 00 00"
+REPLACEMENT="85"
+OFFSET=4
 
 # Setup cleanup for temp files
 TEMP_FILE=""
@@ -133,7 +133,7 @@ if ! echo "$FILE_TYPE" | grep -q "ELF"; then
 fi
 
 SEARCH_PATTERN=$(echo "$PATTERN" | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
-PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/84 81/55 81/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
+PATCHED_PATTERN=$(echo "$PATTERN" | sed 's/0F 84/0F 85/' | tr -d ' ' | tr '?' '.' | tr 'A-Z' 'a-z')
 
 log "Dumping hexcode of original binary"
 
@@ -201,7 +201,7 @@ fi
 log "Call found, patching jz at offset 0x$BYTE_OFFSET_HEX with jnz"
 
 if [ "$DRY_RUN" -eq 1 ]; then
-    log "Dry run: Would patch byte at offset 0x$BYTE_OFFSET_HEX from 0x74 to 0x75"
+    log "Dry run: Would patch byte at offset 0x$BYTE_OFFSET_HEX from 0x84 to 0x85"
     log "No changes made to '$BINARY_FILE'."
     exit 0
 fi
