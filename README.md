@@ -80,6 +80,10 @@ You can now upload your license in your system console or your environment varia
 
 If you are not using your own image that is built upon bringing your container up or have automated the process, you will have to repeat the steps to patch the binary on every update. You will not have to create or upload new licenses.
 
+# Patch Pattern Changes
+
+The binary pattern that `patch.sh` searches for can change between Mattermost versions. When this happens, the patch script is updated and a new commit is made. This repository uses git tags that mirror Mattermost's version numbers — check the [tags list](https://github.com/WasserEsser/mattermost-patched-enterprise/tags) to find the commit that corresponds to your Mattermost version.
+
 # AI Disclaimer
 
 Starting with `08edabd`, AI (Kimi 2.5 & GLM 5.2) was used to improve the script and reviewed by a human. The patch itself, aka what needs to be patched, is still done and verified by a human. 
