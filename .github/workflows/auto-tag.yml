@@ -14,7 +14,6 @@ on:
 
 permissions:
   contents: write
-  workflows: write
 
 jobs:
   check-and-tag:
@@ -24,6 +23,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          token: ${{ secrets.GH_PAT }}
 
       - name: Fetch existing tags
         id: existing
