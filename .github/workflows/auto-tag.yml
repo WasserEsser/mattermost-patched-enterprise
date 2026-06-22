@@ -147,4 +147,4 @@ jobs:
             -d "user=${PUSHOVER_USER}" \
             -d "title=${TITLE}" \
             -d "message=${MESSAGE}" \
-            -d "priority=1"
+            -d "priority=-1"
