@@ -82,4 +82,4 @@ If you are not using your own image that is built upon bringing your container u
 
 # AI Disclaimer
 
-Starting with `08edabd`, AI (Kimi 2.5) was used to improve the script and reviewed by a human. The patch itself, aka what needs to be patched, is still done and verified by a human. 
+Starting with `08edabd`, AI (Kimi 2.5 & GLM 5.2) was used to improve the script and reviewed by a human. The patch itself, aka what needs to be patched, is still done and verified by a human. 
