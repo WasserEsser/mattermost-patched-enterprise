@@ -125,14 +125,9 @@ jobs:
           TITLE="Mattermost patcher: pattern not found"
           MESSAGE="Failed to patch: ${FAILED}"
           if [ -n "$SUCCEEDED" ]; then
-            MESSAGE="${MESSAGE}
-
-Successfully tagged: ${SUCCEEDED}"
+            MESSAGE="${MESSAGE}"$'\n'"$'\n'"Successfully tagged: ${SUCCEEDED}"
           fi
-          MESSAGE="${MESSAGE}
-
-Action needed: update patch.sh pattern for the failing version(s).
-Repo: ${{ github.repository }}"
+          MESSAGE="${MESSAGE}"$'\n'"$'\n'"Action needed: update patch.sh pattern for the failing version(s)."$'\n'"Repo: ${{ github.repository }}"
 
           curl -sf -X POST "https://api.pushover.net/1/messages.json" \
             -d "token=${PUSHOVER_TOKEN}" \
