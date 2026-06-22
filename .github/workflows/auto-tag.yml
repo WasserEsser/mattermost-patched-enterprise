@@ -1,0 +1,142 @@
+name: Auto-tag new Mattermost releases
+
+on:
+  schedule:
+    # Check every 6 hours
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Allow manual trigger with a specific tag
+    inputs:
+      mattermost_tag:
+        description: 'Specific Mattermost image tag to test (e.g. 11.8.2)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch existing tags
+        id: existing
+        run: |
+          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
+          git tag -l '1[0-9].*' | sort -V >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Discover new Mattermost tags
+        id: discover
+        run: |
+          set -euo pipefail
+
+          # If a specific tag was provided, use only that
+          if [ -n "${{ inputs.mattermost_tag }}" ]; then
+            echo "new_tags=${{ inputs.mattermost_tag }}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXISTING="${{ steps.existing.outputs.tags }}"
+
+          # Fetch all tags from Docker Hub, paginated
+          PAGE=1
+          ALL_TAGS=""
+          while true; do
+            RESPONSE=$(curl -sf "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/?page_size=100&page=${PAGE}")
+            TAGS=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for t in data.get('results', []):
+              name = t['name']
+              # Filter: semantic version tags only (e.g. 11.8.1, not rc, att, sig, sha256)
+              parts = name.split('.')
+              if len(parts) == 3 and all(p.isdigit() for p in parts):
+                  print(name)
+          ")
+            ALL_TAGS="${ALL_TAGS}${ALL_TAGS:+$'\n'}${TAGS}"
+            NEXT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('next','') or '')")
+            if [ -z "$NEXT" ]; then
+              break
+            fi
+            PAGE=$((PAGE + 1))
+          done
+
+          # Find tags that don't exist in our repo yet
+          NEW_TAGS=""
+          while IFS= read -r tag; do
+            [ -z "$tag" ] && continue
+            if ! echo "$EXISTING" | grep -qx "$tag"; then
+              NEW_TAGS="${NEW_TAGS}${NEW_TAGS:+', '}${tag}"
+            fi
+          done <<< "$(echo "$ALL_TAGS" | sort -V -r)"
+
+          echo "new_tags=${NEW_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Discovered new tags: ${NEW_TAGS:-none}"
+
+      - name: Build and tag
+        if: steps.discover.outputs.new_tags != ''
+        id: build
+        run: |
+          set -uo pipefail
+
+          IFS=', ' read -ra TAGS <<< "${{ steps.discover.outputs.new_tags }}"
+
+          SUCCEEDED=""
+          FAILED=""
+
+          for TAG in "${TAGS[@]}"; do
+            echo "=== Testing Mattermost ${TAG} ==="
+            if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
+              SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+', '}${TAG}"
+              git tag "${TAG}" HEAD
+              echo "Tagged ${TAG} on $(git rev-parse --short HEAD)"
+            else
+              FAILED="${FAILED}${FAILED:+', '}${TAG}"
+              echo "Build failed for ${TAG}"
+            fi
+          done
+
+          # Push all new tags
+          if [ -n "$SUCCEEDED" ]; then
+            IFS=', ' read -ra SUCC_TAGS <<< "$SUCCEEDED"
+            for TAG in "${SUCC_TAGS[@]}"; do
+              git push origin "${TAG}"
+            done
+          fi
+
+          echo "succeeded=${SUCCEEDED}" >> "$GITHUB_OUTPUT"
+          echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify on failure
+        if: steps.build.outputs.failed != ''
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: |
+          FAILED="${{ steps.build.outputs.failed }}"
+          SUCCEEDED="${{ steps.build.outputs.succeeded }}"
+
+          TITLE="Mattermost patcher: pattern not found"
+          MESSAGE="Failed to patch: ${FAILED}"
+          if [ -n "$SUCCEEDED" ]; then
+            MESSAGE="${MESSAGE}
+
+Successfully tagged: ${SUCCEEDED}"
+          fi
+          MESSAGE="${MESSAGE}
+
+Action needed: update patch.sh pattern for the failing version(s).
+Repo: ${{ github.repository }}"
+
+          curl -sf -X POST "https://api.pushover.net/1/messages.json" \
+            -d "token=${PUSHOVER_TOKEN}" \
+            -d "user=${PUSHOVER_USER}" \
+            -d "title=${TITLE}" \
+            -d "message=${MESSAGE}" \
+            -d "priority=1"
