@@ -89,9 +89,21 @@ jobs:
 
           SUCCEEDED=""
           FAILED=""
+          SKIPPED=""
 
           for TAG in "${TAGS[@]}"; do
             echo "=== Testing Mattermost ${TAG} ==="
+
+            # Check if the image tag exists on Docker Hub
+            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
+              "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/${TAG}" \
+              || echo "$?")
+            if [ "$HTTP_CODE" != "200" ]; then
+              echo "Tag ${TAG} does not exist on Docker Hub, skipping"
+              SKIPPED="${SKIPPED}${SKIPPED:+', '}${TAG}"
+              continue
+            fi
+
             if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
               SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+', '}${TAG}"
               git tag "${TAG}" HEAD
@@ -112,6 +124,7 @@ jobs:
 
           echo "succeeded=${SUCCEEDED}" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
+          echo "skipped=${SKIPPED}" >> "$GITHUB_OUTPUT"
 
       - name: Notify on failure
         if: steps.build.outputs.failed != ''
