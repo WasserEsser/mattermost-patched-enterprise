@@ -49,7 +49,16 @@ jobs:
           PAGE=1
           ALL_TAGS=""
           while true; do
-            RESPONSE=$(curl -sf "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/?page_size=100&page=${PAGE}")
+            for ATTEMPT in 1 2 3; do
+              RESPONSE=$(curl -sf "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/?page_size=100&page=${PAGE}" && break) || {
+                if [ "$ATTEMPT" -eq 3 ]; then
+                  echo "Failed to fetch Docker Hub tags after 3 attempts"
+                  exit 1
+                fi
+                echo "Docker Hub API error (attempt $ATTEMPT/3), retrying in $((ATTEMPT * 5))s..."
+                sleep $((ATTEMPT * 5))
+              }
+            done
             TAGS=$(echo "$RESPONSE" | python3 -c "
           import sys, json
           data = json.load(sys.stdin)
