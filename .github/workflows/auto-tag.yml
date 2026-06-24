@@ -3,7 +3,7 @@ name: Auto-tag new Mattermost releases
 on:
   schedule:
     # Check every 6 hours
-    - cron: '0 */6 * * *'
+    - cron: '0 2 * * *'
   workflow_dispatch:
     # Allow manual trigger with a specific tag
     inputs:
