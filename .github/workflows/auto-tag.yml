@@ -2,10 +2,9 @@ name: Auto-tag new Mattermost releases
 
 on:
   schedule:
-    # Check every 6 hours
+    # Check daily at 2am UTC
     - cron: '0 2 * * *'
   workflow_dispatch:
-    # Allow manual trigger with a specific tag
     inputs:
       mattermost_tag:
         description: 'Specific Mattermost image tag to test (e.g. 11.8.2)'
@@ -34,10 +33,15 @@ jobs:
 
       - name: Discover new Mattermost tags
         id: discover
+        # Uses the GitHub Releases API (authenticated via GITHUB_TOKEN) instead
+        # of the Docker Hub web API, which is shared across all GitHub Actions
+        # runners and frequently returns 429s during nightly runs.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
-          # If a specific tag was provided, use only that
+          # If a specific tag was provided manually, use only that
           if [ -n "${{ inputs.mattermost_tag }}" ]; then
             echo "new_tags=${{ inputs.mattermost_tag }}" >> "$GITHUB_OUTPUT"
             exit 0
@@ -45,37 +49,31 @@ jobs:
 
           EXISTING="${{ steps.existing.outputs.tags }}"
 
-          # Fetch all tags from Docker Hub, paginated
-          PAGE=1
-          ALL_TAGS=""
-          while true; do
-            for ATTEMPT in 1 2 3; do
-              RESPONSE=$(curl -sf "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/?page_size=100&page=${PAGE}" && break) || {
-                if [ "$ATTEMPT" -eq 3 ]; then
-                  echo "Failed to fetch Docker Hub tags after 3 attempts"
-                  exit 1
-                fi
-                echo "Docker Hub API error (attempt $ATTEMPT/3), retrying in $((ATTEMPT * 5))s..."
-                sleep $((ATTEMPT * 5))
-              }
-            done
-            TAGS=$(echo "$RESPONSE" | python3 -c "
+          # Fetch stable releases from GitHub API. This is authenticated via
+          # GITHUB_TOKEN so it gets 5,000 req/hr — never rate limited from
+          # within GitHub Actions. Fetches enough pages to cover many releases.
+          ALL_TAGS=$(curl -sf \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/mattermost/mattermost/releases?per_page=50" \
+            | python3 -c "
           import sys, json
-          data = json.load(sys.stdin)
-          for t in data.get('results', []):
-              name = t['name']
-              # Filter: semantic version tags only (e.g. 11.8.1, not rc, att, sig, sha256)
-              parts = name.split('.')
+          releases = json.load(sys.stdin)
+          for r in releases:
+              # Skip prereleases and drafts
+              if r.get('prerelease') or r.get('draft'):
+                  continue
+              tag = r['tag_name'].lstrip('v')
+              # Stable semver only: X.Y.Z with all numeric parts
+              parts = tag.split('.')
               if len(parts) == 3 and all(p.isdigit() for p in parts):
-                  print(name)
+                  print(tag)
           ")
-            ALL_TAGS="${ALL_TAGS}${ALL_TAGS:+$'\n'}${TAGS}"
-            NEXT=$(echo "$RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin).get('next','') or '')")
-            if [ -z "$NEXT" ]; then
-              break
-            fi
-            PAGE=$((PAGE + 1))
-          done
+
+          if [ -z "$ALL_TAGS" ]; then
+            echo "No stable Mattermost releases found from GitHub API"
+            exit 1
+          fi
 
           # Find tags that don't exist in our repo yet
           NEW_TAGS=""
@@ -104,12 +102,13 @@ jobs:
           for TAG in "${TAGS[@]}"; do
             echo "=== Testing Mattermost ${TAG} ==="
 
-            # Check if the image tag exists on Docker Hub
-            HTTP_CODE=$(curl -sf -o /dev/null -w "%{http_code}" \
-              "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/${TAG}" \
-              || echo "$?")
+            # Verify the image tag exists on Docker Hub before attempting build.
+            # This is a single targeted call (not paginated) so it's fine to use
+            # the Hub web API here — it only runs when a new release is found.
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/${TAG}")
             if [ "$HTTP_CODE" != "200" ]; then
-              echo "Tag ${TAG} does not exist on Docker Hub, skipping"
+              echo "Tag ${TAG} does not exist on Docker Hub yet (HTTP ${HTTP_CODE}), skipping"
               SKIPPED="${SKIPPED}${SKIPPED:+', '}${TAG}"
               continue
             fi
@@ -136,7 +135,21 @@ jobs:
           echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
           echo "skipped=${SKIPPED}" >> "$GITHUB_OUTPUT"
 
-      - name: Notify on failure
+      - name: Notify on discover failure
+        # Fires when the discover step itself fails — previously silent
+        if: failure() && steps.discover.outcome == 'failure'
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: |
+          curl -sf -X POST "https://api.pushover.net/1/messages.json" \
+            -d "token=${PUSHOVER_TOKEN}" \
+            -d "user=${PUSHOVER_USER}" \
+            -d "title=Mattermost tagger: discovery failed" \
+            -d "message=Failed to discover new Mattermost releases. Check the Actions log: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            -d "priority=0"
+
+      - name: Notify on build failure
         if: steps.build.outputs.failed != ''
         env:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
