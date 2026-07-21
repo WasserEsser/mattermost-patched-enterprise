@@ -80,7 +80,7 @@ jobs:
           while IFS= read -r tag; do
             [ -z "$tag" ] && continue
             if ! echo "$EXISTING" | grep -qx "$tag"; then
-              NEW_TAGS="${NEW_TAGS}${NEW_TAGS:+', '}${tag}"
+              NEW_TAGS="${NEW_TAGS}${NEW_TAGS:+, }${tag}"
             fi
           done <<< "$(echo "$ALL_TAGS" | sort -V -r)"
 
@@ -109,16 +109,16 @@ jobs:
               "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/${TAG}")
             if [ "$HTTP_CODE" != "200" ]; then
               echo "Tag ${TAG} does not exist on Docker Hub yet (HTTP ${HTTP_CODE}), skipping"
-              SKIPPED="${SKIPPED}${SKIPPED:+', '}${TAG}"
+              SKIPPED="${SKIPPED}${SKIPPED:+, }${TAG}"
               continue
             fi
 
             if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
-              SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+', '}${TAG}"
+              SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+, }${TAG}"
               git tag "${TAG}" HEAD
               echo "Tagged ${TAG} on $(git rev-parse --short HEAD)"
             else
-              FAILED="${FAILED}${FAILED:+', '}${TAG}"
+              FAILED="${FAILED}${FAILED:+, }${TAG}"
               echo "Build failed for ${TAG}"
             fi
           done
