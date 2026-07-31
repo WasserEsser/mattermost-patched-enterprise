@@ -15,6 +15,20 @@ return string(plaintext), nil
 
 Instead of dismissing invalid signatures and erroring out, your patched binary will allow invalid signatures, and errors out on valid ones. This allows you to upload your own licenses with any features you want.
 
+## Supported Mattermost versions
+
+`patch.sh` auto-detects the Mattermost version from the binary itself, so any recent copy of the script works for all supported versions:
+
+- 5.39
+- 6.x
+- 7.x
+- 8.x
+- 9.x
+- 10.x
+- 11.x (including 11.10.0-rc1/rc2)
+
+If your version is not detected, the script will tell you and suggest how to proceed. Run `./patch.sh --list` to see the current supported version ranges.
+
 ## Step 1
 
 The first step is to patch the original Mattermost binary shipped with the enterprise edition.
@@ -79,10 +93,6 @@ You can now upload your license in your system console or your environment varia
 # Important Note
 
 If you are not using your own image that is built upon bringing your container up or have automated the process, you will have to repeat the steps to patch the binary on every update. You will not have to create or upload new licenses.
-
-# Patch Pattern Changes
-
-The binary pattern that `patch.sh` searches for can change between Mattermost versions. When this happens, the patch script is updated and a new commit is made. This repository uses git tags that mirror Mattermost's version numbers — check the [tags list](https://github.com/WasserEsser/mattermost-patched-enterprise/tags) to find the commit that corresponds to your Mattermost version.
 
 # AI Disclaimer
 

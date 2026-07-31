@@ -1,0 +1,17 @@
+# Extracted Mattermost binaries used for offline probing/analysis
+mattermost-*
+
+# IDA Pro database files
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.idb
+
+# Local opencode session/config (includes a license file)
+.opencode/
+
+# Test artifacts
+/tmp/

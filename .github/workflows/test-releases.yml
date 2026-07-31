@@ -1,4 +1,4 @@
-name: Auto-tag new Mattermost releases
+name: Test new Mattermost releases
 
 on:
   schedule:
@@ -12,26 +12,18 @@ on:
         default: ''
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  check-and-tag:
+  check-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
           token: ${{ secrets.GH_PAT }}
 
-      - name: Fetch existing tags
-        id: existing
-        run: |
-          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
-          git tag -l '1[0-9].*' | sort -V >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
-
-      - name: Discover new Mattermost tags
+      - name: Discover new Mattermost releases
         id: discover
         # Uses the GitHub Releases API (authenticated via GITHUB_TOKEN) instead
         # of the Docker Hub web API, which is shared across all GitHub Actions
@@ -47,11 +39,9 @@ jobs:
             exit 0
           fi
 
-          EXISTING="${{ steps.existing.outputs.tags }}"
-
           # Fetch stable releases from GitHub API. This is authenticated via
-          # GITHUB_TOKEN so it gets 5,000 req/hr — never rate limited from
-          # within GitHub Actions. Fetches enough pages to cover many releases.
+          # GITHUB_TOKEN so it gets 5,000 req/hr, never rate limited from
+          # within GitHub Actions.
           ALL_TAGS=$(curl -sf \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
@@ -59,6 +49,7 @@ jobs:
             | python3 -c "
           import sys, json
           releases = json.load(sys.stdin)
+          tags = []
           for r in releases:
               # Skip prereleases and drafts
               if r.get('prerelease') or r.get('draft'):
@@ -67,44 +58,37 @@ jobs:
               # Stable semver only: X.Y.Z with all numeric parts
               parts = tag.split('.')
               if len(parts) == 3 and all(p.isdigit() for p in parts):
-                  print(tag)
+                  tags.append(tag)
+          # Only report the latest release per minor version to keep the
+          # test matrix manageable. Older patch releases still work because
+          # patch.sh auto-detects the version.
+          latest_by_minor = {}
+          for t in sorted(tags, key=lambda s: [int(x) for x in s.split('.')]):
+              major, minor, _ = t.split('.')
+              latest_by_minor[f'{major}.{minor}'] = t
+          print('\n'.join(sorted(latest_by_minor.values())))
           ")
 
-          if [ -z "$ALL_TAGS" ]; then
-            echo "No stable Mattermost releases found from GitHub API"
-            exit 1
-          fi
+          echo "new_tags=${ALL_TAGS}" >> "$GITHUB_OUTPUT"
+          echo "Discovered releases to test: ${ALL_TAGS:-none}"
 
-          # Find tags that don't exist in our repo yet
-          NEW_TAGS=""
-          while IFS= read -r tag; do
-            [ -z "$tag" ] && continue
-            if ! echo "$EXISTING" | grep -qx "$tag"; then
-              NEW_TAGS="${NEW_TAGS}${NEW_TAGS:+, }${tag}"
-            fi
-          done <<< "$(echo "$ALL_TAGS" | sort -V -r)"
-
-          echo "new_tags=${NEW_TAGS}" >> "$GITHUB_OUTPUT"
-          echo "Discovered new tags: ${NEW_TAGS:-none}"
-
-      - name: Build and tag
+      - name: Test patch against new releases
         if: steps.discover.outputs.new_tags != ''
         id: build
         run: |
           set -uo pipefail
 
-          IFS=', ' read -ra TAGS <<< "${{ steps.discover.outputs.new_tags }}"
+          IFS=$'\n' read -ra TAGS <<< "${{ steps.discover.outputs.new_tags }}"
 
           SUCCEEDED=""
           FAILED=""
           SKIPPED=""
 
           for TAG in "${TAGS[@]}"; do
+            [ -z "$TAG" ] && continue
             echo "=== Testing Mattermost ${TAG} ==="
 
             # Verify the image tag exists on Docker Hub before attempting build.
-            # This is a single targeted call (not paginated) so it's fine to use
-            # the Hub web API here — it only runs when a new release is found.
             HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
               "https://hub.docker.com/v2/repositories/mattermost/mattermost-enterprise-edition/tags/${TAG}")
             if [ "$HTTP_CODE" != "200" ]; then
@@ -115,28 +99,19 @@ jobs:
 
             if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
               SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+, }${TAG}"
-              git tag "${TAG}" HEAD
-              echo "Tagged ${TAG} on $(git rev-parse --short HEAD)"
+              echo "Patched ${TAG} successfully"
             else
               FAILED="${FAILED}${FAILED:+, }${TAG}"
               echo "Build failed for ${TAG}"
             fi
           done
 
-          # Push all new tags
-          if [ -n "$SUCCEEDED" ]; then
-            IFS=', ' read -ra SUCC_TAGS <<< "$SUCCEEDED"
-            for TAG in "${SUCC_TAGS[@]}"; do
-              git push origin "${TAG}"
-            done
-          fi
-
           echo "succeeded=${SUCCEEDED}" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
           echo "skipped=${SKIPPED}" >> "$GITHUB_OUTPUT"
 
       - name: Notify on discover failure
-        # Fires when the discover step itself fails — previously silent
+        # Fires when the discover step itself fails, previously silent
         if: failure() && steps.discover.outcome == 'failure'
         env:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
@@ -145,11 +120,11 @@ jobs:
           curl -sf -X POST "https://api.pushover.net/1/messages.json" \
             -d "token=${PUSHOVER_TOKEN}" \
             -d "user=${PUSHOVER_USER}" \
-            -d "title=Mattermost tagger: discovery failed" \
+            -d "title=Mattermost patcher: discovery failed" \
             -d "message=Failed to discover new Mattermost releases. Check the Actions log: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             -d "priority=0"
 
-      - name: Notify on build failure
+      - name: Notify on patch failure
         if: steps.build.outputs.failed != ''
         env:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
@@ -161,9 +136,9 @@ jobs:
           TITLE="Mattermost patcher: pattern not found"
           MESSAGE=$(printf "Failed to patch: %s" "$FAILED")
           if [ -n "$SUCCEEDED" ]; then
-            MESSAGE=$(printf "%s\n\nSuccessfully tagged: %s" "$MESSAGE" "$SUCCEEDED")
+            MESSAGE=$(printf "%s\n\nSuccessfully patched: %s" "$MESSAGE" "$SUCCEEDED")
           fi
-          MESSAGE=$(printf "%s\n\nAction needed: update patch.sh pattern for the failing version(s).\nRepo: %s" "$MESSAGE" "${{ github.repository }}")
+          MESSAGE=$(printf "%s\n\nAction needed: update patch.sh for the failing version(s).\nRepo: %s" "$MESSAGE" "${{ github.repository }}")
 
           curl -sf -X POST "https://api.pushover.net/1/messages.json" \
             -d "token=${PUSHOVER_TOKEN}" \
