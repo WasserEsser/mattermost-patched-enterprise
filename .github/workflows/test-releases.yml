@@ -69,7 +69,12 @@ jobs:
           print('\n'.join(sorted(latest_by_minor.values())))
           ")
 
-          echo "new_tags=${ALL_TAGS}" >> "$GITHUB_OUTPUT"
+          # new_tags can span multiple lines, which GITHUB_OUTPUT only accepts
+          # via the heredoc-style delimiter syntax.
+          DELIMITER="mm_eof"
+          echo "new_tags<<${DELIMITER}" >> "$GITHUB_OUTPUT"
+          echo "$ALL_TAGS" >> "$GITHUB_OUTPUT"
+          echo "${DELIMITER}" >> "$GITHUB_OUTPUT"
           echo "Discovered releases to test: ${ALL_TAGS:-none}"
 
       - name: Test patch against new releases
@@ -78,7 +83,7 @@ jobs:
         run: |
           set -uo pipefail
 
-          IFS=$'\n' read -ra TAGS <<< "${{ steps.discover.outputs.new_tags }}"
+          mapfile -t TAGS <<< "${{ steps.discover.outputs.new_tags }}"
 
           SUCCEEDED=""
           FAILED=""
