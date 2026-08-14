@@ -13,9 +13,11 @@ Usage: $0 [OPTIONS] <binary_file>
 
 Patches Mattermost Enterprise Edition binary to bypass license validation.
 
-The license verification code differs between Mattermost versions, so this
-script contains a table of known byte patterns. The version is auto-detected
-by searching for each pattern; the one that matches exactly once is used.
+Supports x86-64 and ARM64 (aarch64) binaries; the architecture is detected
+from the ELF header. The license verification code differs between Mattermost
+versions, so this script contains a table of known byte patterns per
+architecture. The version is auto-detected by searching for each pattern; the
+one that matches exactly once is used.
 
 Options:
   -h, --help     Show this help message and exit
@@ -36,6 +38,7 @@ Exit codes:
   9  Failed to write patch
   10 Patch verification failed
   11 Not an ELF binary
+  12 Unsupported architecture
 
 EOF
 }
@@ -45,7 +48,15 @@ EOF
 #   pattern     Hex bytes of the license check, "??" = any single byte
 #   offset      Byte offset into the pattern of the byte to modify
 #   replacement Hex value to write at that byte (e.g. 0F 84 jz -> 0F 85 jnz)
-PATTERNS=(
+#
+# x86-64: the check is 'test rax,rax; jz' right after the rsa.VerifyPKCS1v15
+# call; the 0F 84 (jz) is inverted to 0F 85 (jnz).
+#
+# ARM64: the check is a 'cbz' (compare-and-branch-on-zero) on the returned
+# error right after the call. ARM64 is little-endian, so the opcode's high
+# byte is the LAST byte of the 4-byte instruction: cbz = ?? ?? ?? B4,
+# cbnz = ?? ?? ?? B5. The B4 is inverted to B5.
+PATTERNS_X86_64=(
     "5.39|48 8B 84 24 48 01 00 00 48 89 44 24 28 48 C7 44 24 30 00 01 00 00 48 8B 44 24 68 48 89 44 24 38 E8 ?? ?? ?? ?? 48 8B 44 24 40 48 8B 4C 24 48 48 83 7C 24 40 00 0F 84 ?? ?? ?? ??|54|85"
     "6.0-6.6|48 8B 44 24 70 48 89 44 24 38 E8 ?? ?? ?? ?? 48 8B 44 24 40 48 8B 4C 24 48 48 83 7C 24 40 00 0F 84 ?? ?? ?? ??|32|85"
     "6.7-7.10|48 85 C0 0F 84 ?? ?? ?? ?? 48 8B 15 ?? ?? ?? ?? 48 8B 0A FF D1 48 89 84 24 68 01 00 00 48 89 9C 24 70 01 00 00 88 8C 24 78 01 00 00 48 89 BC 24 80 01 00 00 F2 0F 11 84 24 88 01 00 00 48 89 B4 24 90 01 00 00 4C 89 84 24 98 01 00 00 4C 89 8C 24 A0 01 00 00 4C 89 94 24 A8 01 00 00 48 8B 8C 24 68 01 00 00 48 89 8C 24 40 02 00 00 0F 10 84 24 70 01 00 00 0F 11 84 24 48 02 00 00 0F 10 84 24 80 01 00 00 0F 11 84 24 58 02 00 00 0F 10 84 24 90 01 00 00 0F 11 84 24 68 02 00 00 0F 10 84 24 A0 01 00 00 0F 11 84 24 78 02 00 00 48 8D 05 ?? ?? ?? ?? ?? ?? ?? ?? ?? E8|4|85"
@@ -55,10 +66,29 @@ PATTERNS=(
     "11.10|48 85 C0 0F 84 ?? ?? ?? ?? 48 89 9C 24 B8 01 00 00 48 89 44 24 70|4|85"
 )
 
+# ARM64 (aarch64) patterns. Note that Mattermost only ships ARM64 enterprise
+# builds starting with 6.1 (no ARM64 build exists for 5.39/6.0).
+# The byte to flip is the cbz -> cbnz opcode byte at the END of the 4-byte
+# little-endian branch instruction.
+PATTERNS_ARM64=(
+    "6.0-6.6|E0 03 78 B2 E0 1F 00 F9 E0 37 40 F9 E0 23 00 F9 ?? ?? ?? ?? E0 27 40 F9 E1 2B 40 F9 E2 27 40 F9 ?? ?? ?? B4|35|B5"
+    "6.7-9.7|E7 2F 40 F9 E1 0B 40 B2 E2 03 00 AA E0 AB 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+    "9.8-11.6|E7 2B 40 F9 E1 0B 40 B2 E2 03 00 AA E0 A7 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+    "11.7|E7 2B 40 F9 E1 0B 40 B2 E2 03 00 AA E0 B7 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+    "11.8-11.9|E7 2F 40 F9 E1 0B 40 B2 E2 03 00 AA E0 BF 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+    "11.10|E8 33 40 F9 E0 DF 40 F9 E1 37 40 F9 E2 3B 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+)
+
 # List supported versions
 list_versions() {
     echo "Supported Mattermost versions:"
-    for entry in "${PATTERNS[@]}"; do
+    echo "x86-64:"
+    for entry in "${PATTERNS_X86_64[@]}"; do
+        versions="${entry%%|*}"
+        echo "  - $versions"
+    done
+    echo "ARM64 (aarch64):"
+    for entry in "${PATTERNS_ARM64[@]}"; do
         versions="${entry%%|*}"
         echo "  - $versions"
     done
@@ -235,6 +265,20 @@ if ! echo "$FILE_TYPE" | grep -q "ELF"; then
     exit 11
 fi
 
+# Select the pattern table matching the binary's architecture
+if echo "$FILE_TYPE" | grep -q "x86-64"; then
+    ARCH="x86-64"
+    PATTERNS=("${PATTERNS_X86_64[@]}")
+elif echo "$FILE_TYPE" | grep -q "ARM aarch64"; then
+    ARCH="arm64"
+    PATTERNS=("${PATTERNS_ARM64[@]}")
+else
+    echo "Error: Unsupported architecture (detected: $FILE_TYPE)." >&2
+    echo "Supported architectures: x86-64 and ARM aarch64." >&2
+    exit 1
+fi
+log "Detected architecture: $ARCH"
+
 # Prepare a searchable copy of the binary.
 # Fast path: strip newlines (1:1 byte mapping, preserves offsets) so grep -P
 # can match byte sequences that would otherwise span line boundaries.
@@ -323,7 +367,7 @@ for idx in "${!PATTERNS[@]}"; do
 done
 
 if [ "$ANY_PATCHED" -eq 1 ]; then
-    log "Binary appears to already be patched (jnz instruction found)."
+    log "Binary appears to already be patched (conditional branch already inverted)."
     exit 6
 fi
 
@@ -362,7 +406,7 @@ if [ "$ORIGINAL_BYTE" = "??" ]; then
 fi
 
 log "Detected version: $versions"
-log "Call found, patching jz at offset 0x$BYTE_OFFSET_HEX with jnz"
+log "Call found, inverting conditional branch at offset 0x$BYTE_OFFSET_HEX ($ORIGINAL_BYTE -> $replacement)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
     log "Dry run: Would patch byte at offset 0x$BYTE_OFFSET_HEX from 0x$ORIGINAL_BYTE to 0x$replacement"
@@ -380,7 +424,7 @@ WRITTEN_BYTE=$(dd if="$BINARY_FILE" bs=1 skip="$BYTE_OFFSET" count=1 2>/dev/null
     echo "Error: Failed to read back patched byte at offset 0x$BYTE_OFFSET_HEX for verification." >&2
     exit 1
 }
-if [ "$WRITTEN_BYTE" != "$replacement" ]; then
+if [ "$(echo "$WRITTEN_BYTE" | tr "A-F" "a-f")" != "$(echo "$replacement" | tr "A-F" "a-f")" ]; then
     echo "Error: Patch verification failed! Expected '$replacement' but found '$WRITTEN_BYTE' at offset 0x$BYTE_OFFSET_HEX." >&2
     exit 10
 fi

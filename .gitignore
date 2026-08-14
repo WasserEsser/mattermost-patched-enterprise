@@ -15,3 +15,6 @@ mattermost-*
 
 # Test artifacts
 /tmp/
+
+# Downloaded ARM64 release tarballs/binaries
+/arm/

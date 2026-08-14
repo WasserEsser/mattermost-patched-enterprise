@@ -23,6 +23,18 @@ jobs:
         with:
           token: ${{ secrets.GH_PAT }}
 
+      # Needed to execute the ARM64 binary (binfmt via qemu-user) on the
+      # x86-64 runner for the smoke test
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install patch tooling
+        run: |
+          if ! command -v xxd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq vim-common
+          fi
+
       - name: Discover new Mattermost releases
         id: discover
         # Uses the GitHub Releases API (authenticated via GITHUB_TOKEN) instead
@@ -88,6 +100,9 @@ jobs:
           SUCCEEDED=""
           FAILED=""
           SKIPPED=""
+          ARM64_SUCCEEDED=""
+          ARM64_FAILED=""
+          ARM64_SKIPPED=""
 
           for TAG in "${TAGS[@]}"; do
             [ -z "$TAG" ] && continue
@@ -99,21 +114,63 @@ jobs:
             if [ "$HTTP_CODE" != "200" ]; then
               echo "Tag ${TAG} does not exist on Docker Hub yet (HTTP ${HTTP_CODE}), skipping"
               SKIPPED="${SKIPPED}${SKIPPED:+, }${TAG}"
+              ARM64_SKIPPED="${ARM64_SKIPPED}${ARM64_SKIPPED:+, }${TAG}"
               continue
             fi
 
+            # x86-64 build (classic builder, from the Docker Hub image)
             if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
               SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+, }${TAG}"
-              echo "Patched ${TAG} successfully"
+              echo "Patched ${TAG} (amd64) successfully"
             else
               FAILED="${FAILED}${FAILED:+, }${TAG}"
-              echo "Build failed for ${TAG}"
+              echo "Build failed for ${TAG} (amd64)"
+            fi
+
+            # Mattermost does not publish ARM64 images on Docker Hub, only
+            # arm64 tarballs on releases.mattermost.com (starting with 6.1).
+            # Download, extract and patch the binary directly, then
+            # smoke-test it under QEMU.
+            ARM64_TARBALL_URL="https://releases.mattermost.com/${TAG}/mattermost-enterprise-${TAG}-linux-arm64.tar.gz"
+            if curl -sfIL -o /dev/null "$ARM64_TARBALL_URL"; then
+              rm -rf /tmp/mm-arm64 && mkdir -p /tmp/mm-arm64
+              if curl -sfL "$ARM64_TARBALL_URL" | tar -xz -C /tmp/mm-arm64; then
+                ARM64_BIN="/tmp/mm-arm64/mattermost/bin/mattermost"
+                if [ -f "$ARM64_BIN" ]; then
+                  if bash patch.sh --quiet "$ARM64_BIN"; then
+                    if "$ARM64_BIN" version > /tmp/mm-arm64/version.txt 2>&1; then
+                      ARM64_SUCCEEDED="${ARM64_SUCCEEDED}${ARM64_SUCCEEDED:+, }${TAG}"
+                      echo "Patched ${TAG} (arm64) successfully"
+                      head -3 /tmp/mm-arm64/version.txt
+                    else
+                      ARM64_FAILED="${ARM64_FAILED}${ARM64_FAILED:+, }${TAG}"
+                      echo "ARM64 smoke test failed for ${TAG}"
+                      head -5 /tmp/mm-arm64/version.txt
+                    fi
+                  else
+                    ARM64_FAILED="${ARM64_FAILED}${ARM64_FAILED:+, }${TAG}"
+                    echo "Patch failed for ${TAG} (arm64)"
+                  fi
+                else
+                  ARM64_FAILED="${ARM64_FAILED}${ARM64_FAILED:+, }${TAG}"
+                  echo "Unexpected tarball layout for ${TAG} (arm64)"
+                fi
+              else
+                ARM64_FAILED="${ARM64_FAILED}${ARM64_FAILED:+, }${TAG}"
+                echo "Download failed for ${TAG} (arm64)"
+              fi
+            else
+              echo "Tag ${TAG} has no ARM64 tarball on releases.mattermost.com, skipping arm64"
+              ARM64_SKIPPED="${ARM64_SKIPPED}${ARM64_SKIPPED:+, }${TAG}"
             fi
           done
 
           echo "succeeded=${SUCCEEDED}" >> "$GITHUB_OUTPUT"
           echo "failed=${FAILED}" >> "$GITHUB_OUTPUT"
           echo "skipped=${SKIPPED}" >> "$GITHUB_OUTPUT"
+          echo "arm64_succeeded=${ARM64_SUCCEEDED}" >> "$GITHUB_OUTPUT"
+          echo "arm64_failed=${ARM64_FAILED}" >> "$GITHUB_OUTPUT"
+          echo "arm64_skipped=${ARM64_SKIPPED}" >> "$GITHUB_OUTPUT"
 
       - name: Notify on discover failure
         # Fires when the discover step itself fails, previously silent
@@ -130,18 +187,33 @@ jobs:
             -d "priority=0"
 
       - name: Notify on patch failure
-        if: steps.build.outputs.failed != ''
+        if: steps.build.outputs.failed != '' || steps.build.outputs.arm64_failed != ''
         env:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
         run: |
           FAILED="${{ steps.build.outputs.failed }}"
           SUCCEEDED="${{ steps.build.outputs.succeeded }}"
+          ARM64_FAILED="${{ steps.build.outputs.arm64_failed }}"
+          ARM64_SUCCEEDED="${{ steps.build.outputs.arm64_succeeded }}"
 
           TITLE="Mattermost patcher: pattern not found"
-          MESSAGE=$(printf "Failed to patch: %s" "$FAILED")
+          MESSAGE=""
+          if [ -n "$FAILED" ]; then
+            MESSAGE=$(printf "Failed to patch (amd64): %s" "$FAILED")
+          fi
+          if [ -n "$ARM64_FAILED" ]; then
+            if [ -n "$MESSAGE" ]; then
+              MESSAGE=$(printf "%s\nFailed to patch (arm64): %s" "$MESSAGE" "$ARM64_FAILED")
+            else
+              MESSAGE=$(printf "Failed to patch (arm64): %s" "$ARM64_FAILED")
+            fi
+          fi
           if [ -n "$SUCCEEDED" ]; then
-            MESSAGE=$(printf "%s\n\nSuccessfully patched: %s" "$MESSAGE" "$SUCCEEDED")
+            MESSAGE=$(printf "%s\n\nSuccessfully patched (amd64): %s" "$MESSAGE" "$SUCCEEDED")
+          fi
+          if [ -n "$ARM64_SUCCEEDED" ]; then
+            MESSAGE=$(printf "%s\nSuccessfully patched (arm64): %s" "$MESSAGE" "$ARM64_SUCCEEDED")
           fi
           MESSAGE=$(printf "%s\n\nAction needed: update patch.sh for the failing version(s).\nRepo: %s" "$MESSAGE" "${{ github.repository }}")
 

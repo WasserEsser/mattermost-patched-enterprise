@@ -17,9 +17,9 @@ Instead of dismissing invalid signatures and erroring out, your patched binary w
 
 ## Supported Mattermost versions
 
-`patch.sh` auto-detects the Mattermost version from the binary itself, so any recent copy of the script works for all supported versions:
+`patch.sh` auto-detects the Mattermost version and architecture (x86-64 or ARM64) from the binary itself, so any recent copy of the script works for all supported versions:
 
-- 5.39
+- 5.39 (x86-64 only)
 - 6.x
 - 7.x
 - 8.x
@@ -27,7 +27,29 @@ Instead of dismissing invalid signatures and erroring out, your patched binary w
 - 10.x
 - 11.x (including 11.10.0-rc1/rc2)
 
+ARM64 (aarch64) support covers the same versions except 5.39/6.0, for which no
+ARM64 enterprise builds exist (the first ARM64 build is 6.1). ARM64 versions
+are grouped slightly differently because the compiler emits identical code
+across a wider range:
+
+- 6.0-6.6
+- 6.7-9.7
+- 9.8-11.6
+- 11.7
+- 11.8-11.9
+- 11.10
+
+On ARM64 the patch inverts a `cbz` (compare-and-branch-on-zero) into a
+`cbnz` right after the `rsa.VerifyPKCS1v15` call, which is the same
+semantic inversion as the x86-64 `jz` -> `jnz`.
+
 If your version is not detected, the script will tell you and suggest how to proceed. Run `./patch.sh --list` to see the current supported version ranges.
+
+The CI pipeline (`.github/workflows/test-releases.yml`) tests every new
+release for both architectures: the x86-64 image is built from the Docker
+Hub image, and the ARM64 build is downloaded as a tarball from
+`releases.mattermost.com` (Mattermost does not publish ARM64 Docker images),
+patched, and smoke-tested under QEMU.
 
 ## Step 1
 
