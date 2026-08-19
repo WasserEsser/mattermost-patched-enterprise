@@ -149,7 +149,7 @@ hex_to_pcre() {
         if [ "$token" = "??" ]; then
             out+='[\x00-\xff]'
         else
-            lower=$(echo "$token" | tr 'A-F' 'a-f')
+            lower=$(echo "$token" | LC_ALL=C tr 'A-F' 'a-f')
             if [ "$lower" = "0a" ]; then
                 out+='[\x00-\xff]'
             else
@@ -169,7 +169,7 @@ hex_to_regex() {
         if [ "$token" = "??" ]; then
             out+='..'
         else
-            out+="$(echo "$token" | tr 'A-F' 'a-f')"
+            out+="$(echo "$token" | LC_ALL=C tr 'A-F' 'a-f')"
         fi
     done
     echo "$out"
@@ -208,7 +208,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Check for required dependencies
-DEPENDENCIES=(xxd grep awk dd tr mktemp file)
+DEPENDENCIES=(xxd grep awk dd tr mktemp file fold)
 MISSING_DEPS=()
 
 for dep in "${DEPENDENCIES[@]}"; do
@@ -282,17 +282,25 @@ log "Detected architecture: $ARCH"
 # Prepare a searchable copy of the binary.
 # Fast path: strip newlines (1:1 byte mapping, preserves offsets) so grep -P
 # can match byte sequences that would otherwise span line boundaries.
-TEMP_FILE=$(mktemp)
+TEMP_FILE=$(mktemp) || {
+    echo "Error: failed to create a temporary file (is TMPDIR writable and not full?)." >&2
+    exit 1
+}
 if [ "$HAVE_PCRE" -eq 1 ]; then
     log "Preparing binary for search"
     if ! tr '\n' '\r' < "$BINARY_FILE" > "$TEMP_FILE"; then
-        echo "Error: Failed to read binary file '$BINARY_FILE'." >&2
+        echo "Error: Failed to prepare '$BINARY_FILE' for search (unreadable file, or no space left in TMPDIR)." >&2
         exit 1
     fi
 else
     log "Dumping hexcode of original binary"
-    if ! hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" > "$TEMP_FILE"; then
-        echo "Error: Failed to read binary file '$BINARY_FILE'." >&2
+    # Fold the hexdump into lines so grep processes short lines: a single
+    # 2x-file-size line would exhaust memory on constrained systems and is
+    # orders of magnitude slower. Byte offsets stay valid because grep -b
+    # reports absolute file offsets; search_pattern() corrects for the
+    # inserted newlines.
+    if ! hexdump -ve '1/1 "%.2x"' "$BINARY_FILE" | fold -w 65536 > "$TEMP_FILE"; then
+        echo "Error: Failed to hexdump '$BINARY_FILE' (unreadable file, or no space left in TMPDIR)." >&2
         exit 1
     fi
 fi
@@ -315,7 +323,7 @@ fi
 # Usage: search_pattern <hex_pattern> <pcre_pattern> <plain_regex> <hex_mode(0|1)>
 search_pattern() {
     local hex_pattern="$1" pcre="$2" plain="$3" hex_mode="$4"
-    local search_file="$BINARY_FILE" result rc
+    local search_file="$BINARY_FILE" result rc errf
 
     # Hexdump mode always searches the hexdump (TEMP_FILE). PCRE mode
     # searches the raw binary, except for patterns containing a literal
@@ -324,22 +332,36 @@ search_pattern() {
         search_file="$TEMP_FILE"
     fi
 
+    errf=$(mktemp) || { echo "Error: failed to create a temporary file (is TMPDIR writable and not full?)." >&2; exit 1; }
     if [ "$hex_mode" -eq 1 ]; then
-        result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>/dev/null); rc=$?
+        result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>"$errf"); rc=$?
     else
-        result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>/dev/null); rc=$?
+        result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>"$errf"); rc=$?
     fi
 
     # grep exits 1 when there is simply no match. Exit 2 means grep itself
-    # failed (e.g. out of memory on the flattened copy of a huge binary).
-    # Skip this pattern with a warning and keep looking: the remaining
-    # patterns search the raw binary and still work on constrained systems.
-    # Note: warn on stderr - stdout is captured by the caller.
+    # failed for some reason (out of memory, permission denied, ...). Skip
+    # this pattern with a visible warning - including grep's own error -
+    # and keep looking: the remaining patterns search the raw binary and
+    # still work on constrained systems. Note: warn on stderr, stdout is
+    # captured by the caller.
     if [ "$rc" -eq 2 ]; then
-        echo "Warning: grep failed on '$search_file' (out of memory?), skipping this pattern" >&2
+        echo "Warning: grep failed on '$search_file' ($(cat "$errf")), skipping this pattern" >&2
         result=""
     fi
-    echo "$result" | awk -F: '{print $1}'
+    rm -f "$errf"
+    # Note: the NF guard is important - an empty grep result still pipes
+    # one empty line into awk, and arithmetic on it would fabricate a
+    # phantom offset 0 match.
+    if [ "$hex_mode" -eq 1 ]; then
+        # The hexdump is folded at 65536 chars per line; fold inserts a
+        # newline after every 65536 chars, so each match offset in the
+        # folded file includes one extra byte per completed line before it.
+        # Unfold: true_offset = p - floor((p + 1) / 65537).
+        echo "$result" | awk -F: 'NF {print $1 - int(($1 + 1) / 65537)}'
+    else
+        echo "$result" | awk -F: 'NF {print $1}'
+    fi
 }
 
 log "Searching for license validation code inside LicenseValidatorImpl.ValidateLicense()"
