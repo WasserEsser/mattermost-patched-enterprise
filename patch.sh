@@ -302,16 +302,44 @@ if [ ! -s "$TEMP_FILE" ]; then
     exit 1
 fi
 
-# Search a pattern in the prepared file.
+# Search a pattern in the binary.
 # Prints one "<byte_offset>" per match (byte offset into the original file).
-# Usage: search_pattern <prepared_file> <pcre_pattern> <plain_regex> <hex_mode(0|1)>
+#
+# Patterns that contain a literal 0x0a byte are searched in the prepared
+# newline-flattened copy (grep cannot match across line boundaries). All
+# other patterns are searched in the raw binary: grep then processes short
+# lines instead of one giant line, which keeps memory usage low even for
+# huge binaries. (grep -P buffers the whole flattened line, which can
+# exhaust memory on constrained systems and fail silently.)
+#
+# Usage: search_pattern <hex_pattern> <pcre_pattern> <plain_regex> <hex_mode(0|1)>
 search_pattern() {
-    local file="$1" pcre="$2" plain="$3" hex_mode="$4"
+    local hex_pattern="$1" pcre="$2" plain="$3" hex_mode="$4"
+    local search_file="$BINARY_FILE" result rc
+
+    # Hexdump mode always searches the hexdump (TEMP_FILE). PCRE mode
+    # searches the raw binary, except for patterns containing a literal
+    # 0x0a byte, which need the newline-flattened copy.
+    if [ "$hex_mode" -eq 1 ] || echo "$hex_pattern" | tr ' ' '\n' | grep -qxi '0a'; then
+        search_file="$TEMP_FILE"
+    fi
+
     if [ "$hex_mode" -eq 1 ]; then
-        LC_ALL=C grep -Eo -b "$plain" "$file" 2>/dev/null || true
+        result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>/dev/null); rc=$?
     else
-        LC_ALL=C grep -aboP "$pcre" "$file" 2>/dev/null || true
-    fi | awk -F: '{print $1}'
+        result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>/dev/null); rc=$?
+    fi
+
+    # grep exits 1 when there is simply no match. Exit 2 means grep itself
+    # failed (e.g. out of memory on the flattened copy of a huge binary).
+    # Skip this pattern with a warning and keep looking: the remaining
+    # patterns search the raw binary and still work on constrained systems.
+    # Note: warn on stderr - stdout is captured by the caller.
+    if [ "$rc" -eq 2 ]; then
+        echo "Warning: grep failed on '$search_file' (out of memory?), skipping this pattern" >&2
+        result=""
+    fi
+    echo "$result" | awk -F: '{print $1}'
 }
 
 log "Searching for license validation code inside LicenseValidatorImpl.ValidateLicense()"
@@ -331,12 +359,12 @@ for idx in "${!PATTERNS[@]}"; do
     patched_pcre=$(hex_to_pcre "$patched_pattern")
     patched_plain=$(hex_to_regex "$patched_pattern")
 
-    patched_matches=$(search_pattern "$TEMP_FILE" "$patched_pcre" "$patched_plain" "$((1 - HAVE_PCRE))")
+    patched_matches=$(search_pattern "$patched_pattern" "$patched_pcre" "$patched_plain" "$((1 - HAVE_PCRE))")
     if [ -n "$patched_matches" ]; then
         ANY_PATCHED=1
     fi
 
-    matches=$(search_pattern "$TEMP_FILE" "$search_pcre" "$search_plain" "$((1 - HAVE_PCRE))")
+    matches=$(search_pattern "$pattern" "$search_pcre" "$search_plain" "$((1 - HAVE_PCRE))")
     count=0
     first=""
     for off in $matches; do
