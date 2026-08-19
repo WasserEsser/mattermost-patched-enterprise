@@ -256,7 +256,7 @@ if [ ! -w "$BINARY_FILE" ]; then
 fi
 
 # Check if file is an ELF binary
-FILE_TYPE=$(file -b "$BINARY_FILE") || {
+FILE_TYPE=$(file -bL "$BINARY_FILE") || {
     echo "Error: Unable to determine file type for '$BINARY_FILE'." >&2
     exit 1
 }
