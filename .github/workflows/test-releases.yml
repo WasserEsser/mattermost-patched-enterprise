@@ -208,62 +208,6 @@ jobs:
           echo "arm64_skipped=${ARM64_SKIPPED}" >> "$GITHUB_OUTPUT"
           echo "license_failed=${LICENSE_FAILED}" >> "$GITHUB_OUTPUT"
 
-      - name: Notify on discover failure
-        # Fires when the discover step itself fails, previously silent
-        if: failure() && steps.discover.outcome == 'failure'
-        env:
-          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
-          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
-        run: |
-          curl -sf -X POST "https://api.pushover.net/1/messages.json" \
-            -d "token=${PUSHOVER_TOKEN}" \
-            -d "user=${PUSHOVER_USER}" \
-            -d "title=Mattermost patcher: discovery failed" \
-            -d "message=Failed to discover new Mattermost releases. Check the Actions log: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            -d "priority=0"
-
-      - name: Notify on patch failure
-        if: steps.build.outputs.failed != '' || steps.build.outputs.arm64_failed != '' || steps.build.outputs.license_failed != ''
-        env:
-          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
-          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
-        run: |
-          FAILED="${{ steps.build.outputs.failed }}"
-          SUCCEEDED="${{ steps.build.outputs.succeeded }}"
-          ARM64_FAILED="${{ steps.build.outputs.arm64_failed }}"
-          ARM64_SUCCEEDED="${{ steps.build.outputs.arm64_succeeded }}"
-          LICENSE_FAILED="${{ steps.build.outputs.license_failed }}"
-
-          TITLE="Mattermost patcher: patch or license check failed"
-          MESSAGE=""
-          if [ -n "$FAILED" ]; then
-            MESSAGE=$(printf "Failed to patch (amd64): %s" "$FAILED")
-          fi
-          if [ -n "$ARM64_FAILED" ]; then
-            if [ -n "$MESSAGE" ]; then
-              MESSAGE=$(printf "%s\nFailed to patch (arm64): %s" "$MESSAGE" "$ARM64_FAILED")
-            else
-              MESSAGE=$(printf "Failed to patch (arm64): %s" "$ARM64_FAILED")
-            fi
-          fi
-          if [ -n "$SUCCEEDED" ]; then
-            MESSAGE=$(printf "%s\n\nSuccessfully patched (amd64): %s" "$MESSAGE" "$SUCCEEDED")
-          fi
-          if [ -n "$ARM64_SUCCEEDED" ]; then
-            MESSAGE=$(printf "%s\nSuccessfully patched (arm64): %s" "$MESSAGE" "$ARM64_SUCCEEDED")
-          fi
-          if [ -n "$LICENSE_FAILED" ]; then
-            MESSAGE=$(printf "%s\n\nLicense verification failed for: %s" "$MESSAGE" "$LICENSE_FAILED")
-          fi
-          MESSAGE=$(printf "%s\n\nAction needed: update patch.sh for the failing version(s).\nRepo: %s" "$MESSAGE" "${{ github.repository }}")
-
-          curl -sf -X POST "https://api.pushover.net/1/messages.json" \
-            -d "token=${PUSHOVER_TOKEN}" \
-            -d "user=${PUSHOVER_USER}" \
-            -d "title=${TITLE}" \
-            -d "message=${MESSAGE}" \
-            -d "priority=-1"
-
 
   # Pull requests: verify every pattern group still patches AND accepts the
   # license. One representative version per group per architecture, run in
