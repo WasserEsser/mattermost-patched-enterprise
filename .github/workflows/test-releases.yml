@@ -10,6 +10,14 @@ on:
         description: 'Specific Mattermost image tag to test (e.g. 11.8.2)'
         required: false
         default: ''
+  # Test that PRs do not break any supported version: runs the patch and
+  # license verification against a representative version per pattern group.
+  pull_request:
+
+# Cancel superseded runs of the same kind (newer PR push, newer nightly)
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || 'nightly' }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -103,6 +111,8 @@ jobs:
           ARM64_SUCCEEDED=""
           ARM64_FAILED=""
           ARM64_SKIPPED=""
+          LICENSE_FAILED=""
+          PORT=18000
 
           for TAG in "${TAGS[@]}"; do
             [ -z "$TAG" ] && continue
@@ -122,6 +132,22 @@ jobs:
             if docker build --build-arg MATTERMOST_IMAGE_TAG="${TAG}" -t mm-test:"${TAG}" . ; then
               SUCCEEDED="${SUCCEEDED}${SUCCEEDED:+, }${TAG}"
               echo "Patched ${TAG} (amd64) successfully"
+              # Extract the patched binary plus i18n/templates/mmctl from the
+              # image and verify the license is accepted end-to-end.
+              rm -rf "/tmp/mm-amd64-${TAG}" && mkdir -p "/tmp/mm-amd64-${TAG}/bin"
+              CID=$(docker create mm-test:"${TAG}")
+              docker cp "${CID}:/mattermost/bin/mattermost" "/tmp/mm-amd64-${TAG}/bin/"
+              docker cp "${CID}:/mattermost/bin/mmctl" "/tmp/mm-amd64-${TAG}/bin/"
+              docker cp "${CID}:/mattermost/i18n" "/tmp/mm-amd64-${TAG}/"
+              docker cp "${CID}:/mattermost/templates" "/tmp/mm-amd64-${TAG}/"
+              docker cp "${CID}:/mattermost/config" "/tmp/mm-amd64-${TAG}/"
+              docker rm "${CID}" >/dev/null
+              if bash .github/license-check.sh "/tmp/mm-amd64-${TAG}" "${TAG}-amd64" "$PORT"; then
+                echo "License OK for ${TAG} (amd64)"
+              else
+                LICENSE_FAILED="${LICENSE_FAILED}${LICENSE_FAILED:+, }${TAG} (amd64)"
+              fi
+              PORT=$((PORT + 1))
             else
               FAILED="${FAILED}${FAILED:+, }${TAG}"
               echo "Build failed for ${TAG} (amd64)"
@@ -142,6 +168,12 @@ jobs:
                       ARM64_SUCCEEDED="${ARM64_SUCCEEDED}${ARM64_SUCCEEDED:+, }${TAG}"
                       echo "Patched ${TAG} (arm64) successfully"
                       head -3 /tmp/mm-arm64/version.txt
+                      if bash .github/license-check.sh /tmp/mm-arm64/mattermost "${TAG}-arm64" "$PORT"; then
+                        echo "License OK for ${TAG} (arm64)"
+                      else
+                        LICENSE_FAILED="${LICENSE_FAILED}${LICENSE_FAILED:+, }${TAG} (arm64)"
+                      fi
+                      PORT=$((PORT + 1))
                     else
                       ARM64_FAILED="${ARM64_FAILED}${ARM64_FAILED:+, }${TAG}"
                       echo "ARM64 smoke test failed for ${TAG}"
@@ -171,6 +203,7 @@ jobs:
           echo "arm64_succeeded=${ARM64_SUCCEEDED}" >> "$GITHUB_OUTPUT"
           echo "arm64_failed=${ARM64_FAILED}" >> "$GITHUB_OUTPUT"
           echo "arm64_skipped=${ARM64_SKIPPED}" >> "$GITHUB_OUTPUT"
+          echo "license_failed=${LICENSE_FAILED}" >> "$GITHUB_OUTPUT"
 
       - name: Notify on discover failure
         # Fires when the discover step itself fails, previously silent
@@ -187,7 +220,7 @@ jobs:
             -d "priority=0"
 
       - name: Notify on patch failure
-        if: steps.build.outputs.failed != '' || steps.build.outputs.arm64_failed != ''
+        if: steps.build.outputs.failed != '' || steps.build.outputs.arm64_failed != '' || steps.build.outputs.license_failed != ''
         env:
           PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
           PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
@@ -196,8 +229,9 @@ jobs:
           SUCCEEDED="${{ steps.build.outputs.succeeded }}"
           ARM64_FAILED="${{ steps.build.outputs.arm64_failed }}"
           ARM64_SUCCEEDED="${{ steps.build.outputs.arm64_succeeded }}"
+          LICENSE_FAILED="${{ steps.build.outputs.license_failed }}"
 
-          TITLE="Mattermost patcher: pattern not found"
+          TITLE="Mattermost patcher: patch or license check failed"
           MESSAGE=""
           if [ -n "$FAILED" ]; then
             MESSAGE=$(printf "Failed to patch (amd64): %s" "$FAILED")
@@ -215,6 +249,9 @@ jobs:
           if [ -n "$ARM64_SUCCEEDED" ]; then
             MESSAGE=$(printf "%s\nSuccessfully patched (arm64): %s" "$MESSAGE" "$ARM64_SUCCEEDED")
           fi
+          if [ -n "$LICENSE_FAILED" ]; then
+            MESSAGE=$(printf "%s\n\nLicense verification failed for: %s" "$MESSAGE" "$LICENSE_FAILED")
+          fi
           MESSAGE=$(printf "%s\n\nAction needed: update patch.sh for the failing version(s).\nRepo: %s" "$MESSAGE" "${{ github.repository }}")
 
           curl -sf -X POST "https://api.pushover.net/1/messages.json" \
@@ -223,3 +260,76 @@ jobs:
             -d "title=${TITLE}" \
             -d "message=${MESSAGE}" \
             -d "priority=-1"
+
+
+  # Pull requests: verify every pattern group still patches AND accepts the
+  # license. One representative version per group per architecture, run in
+  # parallel on the matrix. (5.39 has no ARM64 build; 11.6.0 is ARM64-only
+  # here because its x86 pattern group is covered by 11.7.0.)
+  pr-license-matrix:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: "5.39.3",  arch: "amd64" }
+          - { version: "6.6.0",   arch: "amd64" }
+          - { version: "7.10.0",  arch: "amd64" }
+          - { version: "9.7.0",   arch: "amd64" }
+          - { version: "11.7.0",  arch: "amd64" }
+          - { version: "11.9.0",  arch: "amd64" }
+          - { version: "11.10.0", arch: "amd64" }
+          - { version: "6.6.0",   arch: "arm64" }
+          - { version: "9.7.0",   arch: "arm64" }
+          - { version: "11.6.0",  arch: "arm64" }
+          - { version: "11.7.0",  arch: "arm64" }
+          - { version: "11.9.0",  arch: "arm64" }
+          - { version: "11.10.0", arch: "arm64" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      # Needed to execute the ARM64 binary (binfmt via qemu-user)
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install patch tooling
+        run: |
+          if ! command -v xxd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq vim-common
+          fi
+
+      - name: Download and extract Mattermost ${{ matrix.version }} (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/mm-app && mkdir -p /tmp/mm-app
+          curl -sfL -o /tmp/mm.tar.gz \
+            "https://releases.mattermost.com/${{ matrix.version }}/mattermost-enterprise-${{ matrix.version }}-linux-${{ matrix.arch }}.tar.gz"
+          tar -xzf /tmp/mm.tar.gz -C /tmp/mm-app
+
+      - name: Patch the binary
+        run: |
+          set -euo pipefail
+          bash patch.sh --quiet /tmp/mm-app/mattermost/bin/mattermost
+          # second run must detect already-patched (exit 6)
+          set +e
+          bash patch.sh --quiet /tmp/mm-app/mattermost/bin/mattermost
+          code=$?
+          set -e
+          [ "$code" = "6" ] || { echo "ERROR: expected exit 6 (already patched), got $code"; exit 1; }
+
+      - name: Verify the license is accepted
+        run: |
+          bash .github/license-check.sh /tmp/mm-app/mattermost "${{ matrix.version }}-${{ matrix.arch }}" 18000
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-log-${{ matrix.version }}-${{ matrix.arch }}
+          path: /tmp/mm-app/mattermost/server.log
+          if-no-files-found: ignore
