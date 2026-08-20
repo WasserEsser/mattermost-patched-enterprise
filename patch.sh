@@ -325,18 +325,11 @@ search_pattern() {
     local hex_pattern="$1" pcre="$2" plain="$3" hex_mode="$4"
     local search_file="$BINARY_FILE" result rc errf
 
-    # Hexdump mode always searches the hexdump (TEMP_FILE). PCRE mode
-    # searches the raw binary, except for patterns containing a literal
-    # 0x0a byte, which need the newline-flattened copy.
     if [ "$hex_mode" -eq 1 ] || echo "$hex_pattern" | tr ' ' '\n' | grep -qxi '0a'; then
         search_file="$TEMP_FILE"
     fi
 
     errf=$(mktemp) || { echo "Error: failed to create a temporary file (is TMPDIR writable and not full?)." >&2; exit 1; }
-
-    # grep -o writes "<offset>:<raw match>". The match can contain NUL
-    # bytes, so extract the offset before command substitution: Bash cannot
-    # store NUL bytes and would otherwise warn while silently dropping them.
     if [ "$hex_mode" -eq 1 ]; then
         # The hexdump is folded at 65536 chars per line. Unfold its offsets:
         # true_offset = p - floor((p + 1) / 65537).
@@ -346,19 +339,25 @@ search_pattern() {
             rc=$?
         fi
     else
+        # grep -o writes "<offset>:<raw match>". The match can contain NUL
+        # bytes, so extract the offset before command substitution: Bash
+        # cannot store NUL bytes and would otherwise warn while silently
+        # dropping them. (With pipefail the pipeline still reports grep's
+        # exit status, so the error handling below keeps working.)
         if result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>"$errf" | LC_ALL=C awk -F: 'NF {print $1}'); then
             rc=0
         else
             rc=$?
         fi
+        # A pattern whose wildcard bytes span a literal 0x0a byte in the
+        # binary can never match in the raw file (grep cannot match across
+        # line boundaries). If the raw search found nothing, retry on the
+        # newline-flattened copy before giving up on this pattern.
+        if [ "$rc" -eq 1 ] && [ "$search_file" != "$TEMP_FILE" ]; then
+            result=$(LC_ALL=C grep -aboP "$pcre" "$TEMP_FILE" 2>"$errf" | LC_ALL=C awk -F: 'NF {print $1}'); rc=$?
+        fi
     fi
 
-    # grep exits 1 when there is simply no match. Exit 2 means grep itself
-    # failed for some reason (out of memory, permission denied, ...). Skip
-    # this pattern with a visible warning - including grep's own error -
-    # and keep looking: the remaining patterns search the raw binary and
-    # still work on constrained systems. Note: warn on stderr, stdout is
-    # captured by the caller.
     if [ "$rc" -eq 2 ]; then
         echo "Warning: grep failed on '$search_file' ($(cat "$errf")), skipping this pattern" >&2
         result=""

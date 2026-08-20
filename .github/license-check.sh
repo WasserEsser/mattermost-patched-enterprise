@@ -44,16 +44,26 @@ DB_NAME="mm_$(echo "$VERSION" | tr -c "[:alnum:]" "_" | tr "A-Z" "a-z")"
 docker start mm-license-pg >/dev/null 2>&1 || docker run -d --name mm-license-pg \
   -e POSTGRES_USER=mmuser -e POSTGRES_PASSWORD=mmuser -e POSTGRES_DB=mattermost \
   -p 127.0.0.1:${PG_PORT}:5432 postgres:16-alpine >/dev/null || fail "cannot start postgres"
+# Wait until setup has actually finished. pg_isready alone is not enough:
+# the image entrypoint starts a temporary server during setup, so
+# pg_isready can succeed and the real server restarts right after. Only a
+# successful query as mmuser proves the role and database exist.
 PG_UP=0
-for i in $(seq 1 30); do
-  docker exec mm-license-pg pg_isready -U mmuser >/dev/null 2>&1 && { PG_UP=1; break; }
-  sleep 1
+for i in $(seq 1 45); do
+  docker exec mm-license-pg psql -U mmuser -d mattermost -tAc 'SELECT 1' >/dev/null 2>&1 && { PG_UP=1; break; }
+  sleep 2
 done
 [ "$PG_UP" = "1" ] || fail "postgres did not become ready"
 
-# Each version needs its own database (migrations are version-specific)
+# Each version needs its own database (migrations are version-specific).
+# Retry: the server can briefly restart after the entrypoint setup.
 docker exec mm-license-pg dropdb -U mmuser --if-exists "$DB_NAME" >/dev/null 2>&1
-docker exec mm-license-pg createdb -U mmuser "$DB_NAME" >/dev/null 2>&1 || fail "cannot create database $DB_NAME"
+CREATED=0
+for i in $(seq 1 10); do
+  docker exec mm-license-pg createdb -U mmuser "$DB_NAME" >/dev/null 2>&1 && { CREATED=1; break; }
+  sleep 2
+done
+[ "$CREATED" = "1" ] || fail "cannot create database $DB_NAME"
 
 # Config via environment overrides - works across all supported versions
 export MM_SERVICESETTINGS_LISTENADDRESS="127.0.0.1:${PORT}"
