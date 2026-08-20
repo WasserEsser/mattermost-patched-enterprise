@@ -337,6 +337,13 @@ search_pattern() {
         result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>"$errf"); rc=$?
     else
         result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>"$errf"); rc=$?
+        # A pattern whose wildcard bytes span a literal 0x0a byte in the
+        # binary can never match in the raw file (grep cannot match across
+        # line boundaries). If the raw search found nothing, retry on the
+        # newline-flattened copy before giving up on this pattern.
+        if [ "$rc" -eq 1 ] && [ "$search_file" != "$TEMP_FILE" ]; then
+            result=$(LC_ALL=C grep -aboP "$pcre" "$TEMP_FILE" 2>"$errf"); rc=$?
+        fi
     fi
 
     # grep exits 1 when there is simply no match. Exit 2 means grep itself
