@@ -333,10 +333,24 @@ search_pattern() {
     fi
 
     errf=$(mktemp) || { echo "Error: failed to create a temporary file (is TMPDIR writable and not full?)." >&2; exit 1; }
+
+    # grep -o writes "<offset>:<raw match>". The match can contain NUL
+    # bytes, so extract the offset before command substitution: Bash cannot
+    # store NUL bytes and would otherwise warn while silently dropping them.
     if [ "$hex_mode" -eq 1 ]; then
-        result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>"$errf"); rc=$?
+        # The hexdump is folded at 65536 chars per line. Unfold its offsets:
+        # true_offset = p - floor((p + 1) / 65537).
+        if result=$(LC_ALL=C grep -Eo -b "$plain" "$search_file" 2>"$errf" | LC_ALL=C awk -F: 'NF {print $1 - int(($1 + 1) / 65537)}'); then
+            rc=0
+        else
+            rc=$?
+        fi
     else
-        result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>"$errf"); rc=$?
+        if result=$(LC_ALL=C grep -aboP "$pcre" "$search_file" 2>"$errf" | LC_ALL=C awk -F: 'NF {print $1}'); then
+            rc=0
+        else
+            rc=$?
+        fi
     fi
 
     # grep exits 1 when there is simply no match. Exit 2 means grep itself
@@ -350,18 +364,7 @@ search_pattern() {
         result=""
     fi
     rm -f "$errf"
-    # Note: the NF guard is important - an empty grep result still pipes
-    # one empty line into awk, and arithmetic on it would fabricate a
-    # phantom offset 0 match.
-    if [ "$hex_mode" -eq 1 ]; then
-        # The hexdump is folded at 65536 chars per line; fold inserts a
-        # newline after every 65536 chars, so each match offset in the
-        # folded file includes one extra byte per completed line before it.
-        # Unfold: true_offset = p - floor((p + 1) / 65537).
-        echo "$result" | awk -F: 'NF {print $1 - int(($1 + 1) / 65537)}'
-    else
-        echo "$result" | awk -F: 'NF {print $1}'
-    fi
+    printf '%s\n' "$result"
 }
 
 log "Searching for license validation code inside LicenseValidatorImpl.ValidateLicense()"
