@@ -24,6 +24,9 @@ permissions:
 
 jobs:
   check-and-test:
+    # Nightly and manual runs only: PRs are covered by pr-license-matrix,
+    # running both would duplicate the nightly work and spam notifications.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
