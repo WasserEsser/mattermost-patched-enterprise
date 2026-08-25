@@ -227,12 +227,14 @@ jobs:
           - { version: "11.7.0",  arch: "amd64" }
           - { version: "11.9.0",  arch: "amd64" }
           - { version: "11.10.0", arch: "amd64" }
+          - { version: "11.10.1", arch: "amd64" }
           - { version: "6.6.0",   arch: "arm64" }
           - { version: "9.7.0",   arch: "arm64" }
           - { version: "11.6.0",  arch: "arm64" }
           - { version: "11.7.0",  arch: "arm64" }
           - { version: "11.9.0",  arch: "arm64" }
           - { version: "11.10.0", arch: "arm64" }
+          - { version: "11.10.1", arch: "arm64" }
     steps:
       - name: Checkout
         uses: actions/checkout@v4
