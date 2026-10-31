@@ -20,8 +20,7 @@ APP_DIR="$1"
 VERSION="$2"
 PORT="$3"
 : "${PG_PORT:=5432}"
-: "${4:=}"
-LICENSE_OVERRIDE="$4"
+LICENSE_OVERRIDE="${4:-}"
 fail() {
   echo "ERROR: $*"
   exit 1
