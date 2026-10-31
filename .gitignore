@@ -22,6 +22,6 @@ mattermost-*
 # Local agent session state
 .empryo/
 
-# keyswap private key: regenerate with `openssl genrsa -out keyswap-key.pem 2048`
-# and update OUR_KEY in patch.sh to match. Never commit the private half.
+# keyswap signing key, generated on first use by patch.sh / sign-license.sh.
+# Never commit the private half.
 keyswap-key.pem
