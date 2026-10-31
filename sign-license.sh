@@ -122,10 +122,17 @@ fi
 [ -r "$INPUT" ] || { echo "Error: Cannot read '$INPUT'." >&2; exit 3; }
 
 if [ ! -f "$KEY_FILE" ]; then
-    echo "Error: Private key '$KEY_FILE' not found." >&2
-    echo "Generate one (and re-patch your binary with the matching public key):" >&2
-    echo "  openssl genrsa -out keyswap-key.pem 2048" >&2
-    exit 4
+    # Same on-demand behaviour as patch.sh: create the pair on first use so the
+    # two scripts cannot end up with different keys.
+    if [ "$KEY_FILE" = "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/keyswap-key.pem" ] \
+        && command -v openssl >/dev/null 2>&1 \
+        && openssl genrsa -out "$KEY_FILE" 2048 >/dev/null 2>&1; then
+        chmod 600 "$KEY_FILE"
+        log "Generated a new signing key: $KEY_FILE"
+    else
+        echo "Error: Private key '$KEY_FILE' not found." >&2
+        exit 4
+    fi
 fi
 
 # The binary must be patched with the public half of the signing key, otherwise

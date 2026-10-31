@@ -338,19 +338,10 @@ jobs:
       - name: Sign a license with the keyswap key
         run: |
           set -euo pipefail
-          # The private key is not committed; CI generates a throwaway pair.
-          # patch.sh derives the public half from keyswap-key.pem when it is
-          # present, so the binary and the signer always agree.
-          openssl genrsa -out keyswap-key.pem 2048
+          # The patch step above created the key pair on first use; signing must
+          # pick up that same pair, which is the zero-config path a user follows.
           bash sign-license.sh -q -o /tmp/keyswap.license license.json
           [ -s /tmp/keyswap.license ] || { echo "ERROR: sign-license.sh produced no output"; exit 1; }
-          # Re-patch with the generated key: the earlier step used the baked-in
-          # constant, so start from a pristine binary.
-          curl -sfL -o /tmp/mm.tar.gz \
-            "https://releases.mattermost.com/${{ matrix.version }}/mattermost-enterprise-${{ matrix.version }}-linux-${{ matrix.arch }}.tar.gz"
-          rm -rf /tmp/mm-app && mkdir -p /tmp/mm-app
-          tar -xzf /tmp/mm.tar.gz -C /tmp/mm-app
-          bash patch.sh --keyswap --quiet /tmp/mm-app/mattermost/bin/mattermost
 
       - name: Verify the license is accepted
         run: |
@@ -365,7 +356,7 @@ jobs:
           bash .github/license-check.sh /tmp/mm-app/mattermost \
             "${{ matrix.version }}-${{ matrix.arch }}-foreign" 18001 \
             license.mattermost-license && {
-              echo "ERROR: a license not signed with keyswap-key.pem was accepted"
+              echo "ERROR: a license not signed with our key was accepted"
               exit 1
             }
           echo "OK: foreign license rejected, as expected"

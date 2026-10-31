@@ -46,21 +46,12 @@ the version table further down describes.
 ```
 
 Replaces the RSA public key Mattermost embeds (the production key and, on 8.0+,
-the test key) with the one in `keyswap-key.pem`. The signature verification code
-is untouched, so the server still validates the signature - it just validates it
-against your key. A license signed by Mattermost is rejected, and so is one
-signed by anyone else.
+the test key) with your own. The signature verification code is untouched, so the
+server still validates the signature - it just validates it against your key. A
+license signed by Mattermost is rejected, and so is one signed by anyone else.
 
-`keyswap-key.pem` is deliberately **not** committed (see `.gitignore`). Generate
-your own once:
-
-```sh
-openssl genrsa -out keyswap-key.pem 2048
-```
-
-That is all that is needed: `patch.sh` derives the public half from the file at
-patch time, and `sign-license.sh` refuses to sign with a key that does not match
-what `patch.sh` would install.
+The key pair is created automatically on first use and kept next to the scripts.
+Nothing to configure: patch the binary, sign a license, upload it.
 
 This needs no version table: the vendor key bytes are identical in every
 supported release, and builds before 8.0 simply have no test key to replace
@@ -75,11 +66,6 @@ Two fields matter and must not be empty: `id` and `customer.id`. Both are
 26-character lowercase alphanumeric IDs; the server rejects `""` with
 "Invalid value for id when uploading a license". The shipped `license.json`
 already has valid ones - if you edit it, keep them or generate new ones.
-
-`patch.sh` derives the public key from `keyswap-key.pem` when that file sits
-next to it, so patching and signing always use the same key pair. Only if the
-private key is absent (e.g. you patched on another machine) does it fall back to
-the `OUR_KEY` constant baked into the script.
 
 ## Supported Mattermost versions
 

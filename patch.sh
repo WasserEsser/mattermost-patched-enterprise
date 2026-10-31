@@ -458,10 +458,16 @@ keyswap_replace() {
 run_keyswap() {
     local prod_count test_count our_count total
 
-    # Prefer the public half of a local keyswap-key.pem over the baked-in
-    # constant, so patching and signing can never use different key pairs.
+    # The key pair lives next to this script and is created on first use, so
+    # patching and signing always share it.
     local key_file
     key_file="$(dirname "$0")/keyswap-key.pem"
+    if [ ! -f "$key_file" ] && command -v openssl >/dev/null 2>&1; then
+        if openssl genrsa -out "$key_file" 2048 >/dev/null 2>&1; then
+            chmod 600 "$key_file"
+            log "Generated a new signing key: $key_file"
+        fi
+    fi
     if [ -f "$key_file" ] && command -v openssl >/dev/null 2>&1; then
         local derived
         derived=$(openssl rsa -in "$key_file" -pubout 2>/dev/null | sed '/^$/d' || true)
