@@ -36,19 +36,10 @@ lxd7LBKSh7BTjbRtG9DEt1dyMnYQDgRVAdpururuK/otowCowr6X/Etnk2NNeXcZ
 4QIDAQAB
 -----END PUBLIC KEY-----'
 
-# Public half of keyswap-key.pem, installed by --keyswap. Used when no private
-# key is available locally (e.g. the binary was patched elsewhere). If
-# keyswap-key.pem sits next to this script, its public half is derived from it
-# instead, so the two cannot drift apart.
-OUR_KEY='-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzsyRgL+IwTzjrk6+ogS6
-e3XbhNYj6ZW6Ohp36UPrGNJ8GfTJEe+u+73PdijUszSuhFqeXrI5b7cVTsw0leO6
-+x1JWMqjb3B+WgS3flxtZGAwWrS1GPzdzO0Bn4/7IIzEXoPeUXQ5J777Xah5elX1
-19mumiMceZVLl1xvcGS9jpmWak69/uDwjp0tUNpJHovOTKx5k1wf7zcFCUgk+fPx
-EnSuSe9X7coybU/dr+KupNlqpwK65y0CMNAqlYZccJ5LxT5Efj/Hu+L/6csoHeo4
-sg6jqOUL9DG9f8KHLh1ggPi5UIE6k4Zkjb4CbMyA+2AqcUdWEYexXMH54wVGlkD9
-kwIDAQAB
------END PUBLIC KEY-----'
+# The public key installed by --keyswap. Set from keyswap-key.pem, which is
+# generated on first use; there is no baked-in default, so the key that patches
+# the binary is always the key that signs licenses.
+OUR_KEY=""
 
 # Help text
 show_help() {
@@ -462,21 +453,24 @@ run_keyswap() {
     # patching and signing always share it.
     local key_file
     key_file="$(dirname "$0")/keyswap-key.pem"
-    if [ ! -f "$key_file" ] && command -v openssl >/dev/null 2>&1; then
-        if openssl genrsa -out "$key_file" 2048 >/dev/null 2>&1; then
-            chmod 600 "$key_file"
-            log "Generated a new signing key: $key_file"
+    if [ ! -f "$key_file" ]; then
+        if ! command -v openssl >/dev/null 2>&1; then
+            echo "Error: openssl is required to create the signing key." >&2
+            exit 2
         fi
+        if ! openssl genrsa -out "$key_file" 2048 >/dev/null 2>&1; then
+            echo "Error: Failed to create the signing key at '$key_file'." >&2
+            exit 1
+        fi
+        chmod 600 "$key_file"
+        log "Generated a new signing key: $key_file"
     fi
-    if [ -f "$key_file" ] && command -v openssl >/dev/null 2>&1; then
-        local derived
-        derived=$(openssl rsa -in "$key_file" -pubout 2>/dev/null | sed '/^$/d' || true)
-        if [ -n "$derived" ]; then
-            if [ "$derived" != "$OUR_KEY" ]; then
-                log "Using the public key derived from $key_file"
-            fi
-            OUR_KEY="$derived"
-        fi
+
+    OUR_KEY=$(openssl rsa -in "$key_file" -pubout 2>/dev/null | sed '/^$/d' || true)
+    if [ -z "$OUR_KEY" ]; then
+        echo "Error: Cannot read the public key from '$key_file'." >&2
+        echo "Delete it to have a new pair generated, then re-patch the binary." >&2
+        exit 1
     fi
 
     prepare_flat_copy

@@ -136,28 +136,22 @@ if [ ! -f "$KEY_FILE" ]; then
 fi
 
 # The binary must be patched with the public half of the signing key, otherwise
-# the license we produce is silently rejected by the server. Mirror patch.sh's
-# logic: it installs the public half of keyswap-key.pem when that file exists,
-# and the baked-in OUR_KEY constant otherwise.
+# the license we produce is silently rejected by the server. patch.sh installs
+# the public half of keyswap-key.pem, so signing with any other key is a mistake.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PATCH_SCRIPT="$SCRIPT_DIR/patch.sh"
 DEFAULT_KEY="$SCRIPT_DIR/keyswap-key.pem"
-if [ -f "$PATCH_SCRIPT" ]; then
-    if [ -f "$DEFAULT_KEY" ]; then
-        PATCHED_PUB=$(openssl rsa -in "$DEFAULT_KEY" -pubout 2>/dev/null | sed '/^$/d')
-    else
-        PATCHED_PUB=$(awk '/^OUR_KEY=/,/^-----END PUBLIC KEY-----/ {print}' "$PATCH_SCRIPT" \
-            | sed "1s/^OUR_KEY='//" \
-            | sed 's/^-----END PUBLIC KEY-----.*$/-----END PUBLIC KEY-----/' \
-            | sed '/^$/d')
+if [ -f "$DEFAULT_KEY" ]; then
+    PATCHED_PUB=$(openssl rsa -in "$DEFAULT_KEY" -pubout 2>/dev/null | sed '/^$/d' || true)
+    SIGNING_PUB=$(openssl rsa -in "$KEY_FILE" -pubout 2>/dev/null | sed '/^$/d' || true)
+    if [ -z "$SIGNING_PUB" ]; then
+        echo "Error: Cannot read the private key '$KEY_FILE'." >&2
+        echo "Delete '$DEFAULT_KEY' to have a new pair generated, then re-patch the binary." >&2
+        exit 4
     fi
-    SIGNING_PUB=$(openssl rsa -in "$KEY_FILE" -pubout 2>/dev/null | sed '/^$/d')
-    if [ -n "$PATCHED_PUB" ] && [ -n "$SIGNING_PUB" ] && [ "$PATCHED_PUB" != "$SIGNING_PUB" ]; then
-        echo "Error: '$KEY_FILE' does not match the public key patch.sh installs." >&2
+    if [ -n "$PATCHED_PUB" ] && [ "$PATCHED_PUB" != "$SIGNING_PUB" ]; then
+        echo "Error: '$KEY_FILE' does not match the key patch.sh installs." >&2
         echo "Signing with it would produce a license the patched server rejects." >&2
         echo "patch.sh installs the public half of: $DEFAULT_KEY" >&2
-        echo "Either sign with that key, or patch the binary with this one's public half:" >&2
-        echo "$SIGNING_PUB" >&2
         exit 4
     fi
 fi
