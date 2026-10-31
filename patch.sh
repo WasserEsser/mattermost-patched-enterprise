@@ -1,5 +1,10 @@
 #!/bin/bash
 set -euo pipefail
+# The byte patterns contain "??" wildcards and are expanded word-by-word in
+# several helpers. Without noglob, a two-character filename in the current
+# directory would be substituted for the wildcard and silently corrupt the
+# pattern.
+set -f
 
 # CLI options
 QUIET=0
@@ -18,6 +23,11 @@ from the ELF header. The license verification code differs between Mattermost
 versions, so this script contains a table of known byte patterns per
 architecture. The version is auto-detected by searching for each pattern; the
 one that matches exactly once is used.
+
+The table entries are version *ranges*: a pattern that still matches a newer
+release than the one it was written for keeps working, so the release is read
+from the binary itself (its embedded build version) and reported as the
+detected version. The pattern range is only used for matching.
 
 Options:
   -h, --help     Show this help message and exit
@@ -196,6 +206,36 @@ pattern_get_byte() {
         tokens+=("$token")
     done
     echo "${tokens[$offset]}"
+}
+
+# Read the release version embedded in the binary.
+#
+# The pattern table only knows version *ranges*, so a newer release that still
+# compiles to the same code would be reported under the old label. The binary
+# itself knows its exact version: `mattermost version` prints it.
+#
+# Probing is skipped for the oldest pattern groups (5.39, 6.0-6.6): those
+# builds ignore the `version` subcommand and boot a server instead, which
+# would block until the timeout and try to reach a database. Their group label
+# is exact anyway, so there is nothing to gain.
+#
+# Prints the version (e.g. "12.0.1"), or nothing if it cannot be determined.
+# Usage: probe_binary_version <binary_file> <pattern_group>
+probe_binary_version() {
+    local binary="$1" group="$2" out="" rc=0
+    case "$group" in
+        5.39|6.0-6.6) return 0 ;;
+    esac
+    command -v timeout >/dev/null 2>&1 || return 0
+
+    out=$(cd "$(dirname "$binary")" && timeout 5 "./$(basename "$binary")" version 2>/dev/null) || rc=$?
+    [ "$rc" -eq 0 ] || return 0
+
+    # "Version: 12.0.1" - take the first line, strip the label.
+    printf '%s\n' "$out" \
+        | LC_ALL=C awk -F': ' '/^Version: / {print $2; exit}' \
+        | LC_ALL=C grep -Ex '[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?' \
+        || true
 }
 
 # Setup cleanup for temp files
@@ -457,7 +497,13 @@ if [ "$ORIGINAL_BYTE" = "??" ]; then
     exit 8
 fi
 
-log "Detected version: $versions"
+# The table label is a range; prefer the exact release the binary reports.
+BINARY_VERSION=$(probe_binary_version "$BINARY_FILE" "$versions")
+if [ -n "$BINARY_VERSION" ]; then
+    log "Detected version: $BINARY_VERSION (pattern group $versions)"
+else
+    log "Detected version: $versions"
+fi
 log "Call found, inverting conditional branch at offset 0x$BYTE_OFFSET_HEX ($ORIGINAL_BYTE -> $replacement)"
 
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -466,7 +512,19 @@ if [ "$DRY_RUN" -eq 1 ]; then
     exit 0
 fi
 
-if ! printf "$replacement" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1; then
+# Write the patch byte. The version probe executes the binary, and Linux keeps
+# a freshly exited executable mapped for a moment (ETXTBSY on write), so retry
+# briefly before giving up.
+WRITE_OK=0
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if printf "$replacement" | xxd -r -p | dd of="$BINARY_FILE" bs=1 seek="$BYTE_OFFSET" conv=notrunc > /dev/null 2>&1; then
+        WRITE_OK=1
+        break
+    fi
+    sleep 0.2
+done
+
+if [ "$WRITE_OK" -ne 1 ]; then
     echo "Error: Failed to write patch to '$BINARY_FILE'." >&2
     exit 9
 fi

@@ -28,6 +28,19 @@ Instead of dismissing invalid signatures and erroring out, your patched binary w
 - 11.x (including 11.10.0-rc1/rc2)
 - 12.x (12.0.0, 12.0.1, 12.1.0-rc)
 
+The version reported in the output is the exact release the binary reports
+(`mattermost version`), not the pattern's label. The pattern table is made of
+ranges, so a release newer than the range's endpoint still patches correctly
+and is reported under its real version:
+
+```
+Pattern for 11.10-12.1: 1 match(es)
+Detected version: 12.0.1 (pattern group 11.10-12.1)
+```
+
+For 5.39 and 6.0-6.6 the probe is skipped (those builds ignore the `version`
+subcommand and boot a server instead), so the group label is shown as-is.
+
 ARM64 (aarch64) support covers the same versions except 5.39/6.0, for which no
 ARM64 enterprise builds exist (the first ARM64 build is 6.1). ARM64 versions
 are grouped slightly differently because the compiler emits identical code
