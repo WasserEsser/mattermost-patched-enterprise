@@ -15,6 +15,58 @@ return string(plaintext), nil
 
 Instead of dismissing invalid signatures and erroring out, your patched binary will allow invalid signatures, and errors out on valid ones. This allows you to upload your own licenses with any features you want.
 
+## Two patch methods
+
+`patch.sh` supports two independent approaches. Both are verified end-to-end in
+CI; pick whichever fits.
+
+| | `branch` (default) | `keyswap` |
+|---|---|---|
+| What changes | the conditional branch after the signature check | the RSA public key embedded in the binary |
+| Signature check | disabled | still runs, against your key |
+| License file | the one in this repo | one you sign with `sign-license.sh` |
+| Per-version data | byte pattern per version range | none - the vendor key is identical in every version |
+| Accepts a license signed by anyone else | yes | no |
+
+### `branch` (default)
+
+```sh
+./patch.sh ./mattermost
+```
+
+Inverts a single conditional branch, so any signature is accepted. This is what
+the version table further down describes.
+
+### `keyswap`
+
+```sh
+./patch.sh --keyswap ./mattermost          # or: --method keyswap
+./sign-license.sh -o license my-license.json
+./mmctl --local license upload license
+```
+
+Replaces the RSA public key Mattermost embeds (the production key and, on 8.0+,
+the test key) with your own. The signature verification code is untouched, so the
+server still validates the signature - it just validates it against your key. A
+license signed by Mattermost is rejected, and so is one signed by anyone else.
+
+The key pair is created automatically on first use and kept next to the scripts.
+Nothing to configure: patch the binary, sign a license, upload it.
+
+This needs no version table: the vendor key bytes are identical in every
+supported release, and builds before 8.0 simply have no test key to replace
+(the script reports that and patches the production key only).
+
+`sign-license.sh` produces `base64(json || RSA-PKCS1v15-SHA512 signature)` from a
+license JSON, verifying its own signature before writing anything. Use
+`license.json` as a starting point - the `features` block is what actually
+enables enterprise functionality.
+
+Two fields matter and must not be empty: `id` and `customer.id`. Both are
+26-character lowercase alphanumeric IDs; the server rejects `""` with
+"Invalid value for id when uploading a license". The shipped `license.json`
+already has valid ones - if you edit it, keep them or generate new ones.
+
 ## Supported Mattermost versions
 
 `patch.sh` auto-detects the Mattermost version and architecture (x86-64 or ARM64) from the binary itself, so any recent copy of the script works for all supported versions:
@@ -103,13 +155,13 @@ COPY --from=patcher --chown=2000:2000 /mattermost /mattermost/bin/mattermost
 
 Once you have your patched binary up and running, you can now upload license files that were not signed by Mattermost. This means that you can create your own license, or use the license file inside of this repository.
 
-If you want to create your own license, you can modify the example.json file and customize it to your liking. By default, it enables all features and gives you an Enterprise Advanced license. You can specify any customer details you want.
+If you want to create your own license, you can modify the license.json file and customize it to your liking. By default, it enables all features and gives you an Enterprise Advanced license. You can specify any customer details you want.
 
 > Make sure to use IDs consisting of [exactly 26 characters of only letters and numbers](https://github.com/mattermost/mattermost/blob/f00dd11e340cda3c8b9d13cb869db1fcd085580c/server/public/model/utils.go#L764-L776) [A-Za-z0-9].
 
 The 256 x's at the end of the json object is the signature. Since the patched binary now allows invalid signatures, you can put whatever you want in here, or leave it as is. Just make sure that the signature comes right after the json object and is exactly 256 characters in length.
 
-Once you have made your changes to the example.json file, you need to encode it as base64. You can use online tools, or use your locally installed ones. Save the base64 encoded string as a file ending with `.mattermost-license`, such as `license.mattermost-license`.
+Once you have made your changes to the license.json file, you need to encode it as base64. You can use online tools, or use your locally installed ones. Save the base64 encoded string as a file ending with `.mattermost-license`, such as `license.mattermost-license`.
 
 You can now upload your license in your system console or your environment variables, and you should have yourself an unlocked Mattermost instance up and running.
 

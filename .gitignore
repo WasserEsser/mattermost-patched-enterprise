@@ -21,3 +21,7 @@ mattermost-*
 
 # Local agent session state
 .empryo/
+
+# keyswap signing key, generated on first use by patch.sh / sign-license.sh.
+# Never commit the private half.
+keyswap-key.pem

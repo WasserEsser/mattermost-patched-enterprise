@@ -3,12 +3,14 @@
 # that enterprise features are active. Used by the CI workflow for both
 # the nightly new-release run and the pull-request version matrix.
 #
-# Usage: license-check.sh <app_dir> <version_label> <port>
+# Usage: license-check.sh <app_dir> <version_label> <port> [license_file]
 #   app_dir      directory containing bin/mattermost (patched), bin/mmctl,
 #                i18n/ and templates/ (i.e. a full extraction or the
 #                /mattermost dir copied out of the docker image)
 #   version_label used for the database name and log output
 #   port         HTTP port for the test server (must be free)
+#   license_file license to upload (default: license.mattermost-license in the
+#                repo root, which only a `branch`-patched binary accepts)
 #
 # Requires: docker (postgres container), curl. For arm64 binaries the
 # runner needs QEMU/binfmt (docker/setup-qemu-action).
@@ -18,7 +20,7 @@ APP_DIR="$1"
 VERSION="$2"
 PORT="$3"
 : "${PG_PORT:=5432}"
-
+LICENSE_OVERRIDE="${4:-}"
 fail() {
   echo "ERROR: $*"
   exit 1
@@ -35,7 +37,11 @@ mkdir -p "$APP_DIR/config"
 
 # The repo's license file (invalid signature, accepted only by patched binaries)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LICENSE_FILE="$SCRIPT_DIR/../license.mattermost-license"
+if [ -n "$LICENSE_OVERRIDE" ]; then
+  LICENSE_FILE="$LICENSE_OVERRIDE"
+else
+  LICENSE_FILE="$SCRIPT_DIR/../license.mattermost-license"
+fi
 cp "$LICENSE_FILE" "$APP_DIR/license" || fail "cannot copy license file"
 
 DB_NAME="mm_$(echo "$VERSION" | tr -c "[:alnum:]" "_" | tr "A-Z" "a-z")"
