@@ -139,16 +139,16 @@ Pattern rules:
 - Stack offsets (`48 89 9C 24 B8 01 00 00`, `F9 00 E3 E1`...) are compiler-determined and stable within a version line — keep them fixed, they're what makes the pattern unique.
 - The pattern's format is `"versions|pattern|offset|replacement"` where `offset` is the byte index of the byte to flip and `replacement` its new value.
 
-**x86-64 (11.10):** the `0F 84` starts at pattern byte 4:
+**x86-64 (11.10-12.1):** the `0F 84` starts at pattern byte 4:
 
 ```
-"11.10|48 85 C0 0F 84 ?? ?? ?? ?? 48 89 9C 24 B8 01 00 00 48 89 44 24 70|4|85"
+"11.10-12.1|48 85 C0 0F 84 ?? ?? ?? ?? 48 89 9C 24 B8 01 00 00 48 89 44 24 70|4|85"
 ```
 
-**ARM64 (11.10):** ARM64 is little-endian — the opcode's high byte is the **last** byte of the 4-byte instruction. `CBZ` is `?? ?? ?? B4`, `CBNZ` is `?? ?? ?? B5`, so the flip byte sits at offset 23:
+**ARM64 (11.10-12.1):** ARM64 is little-endian — the opcode's high byte is the **last** byte of the 4-byte instruction. `CBZ` is `?? ?? ?? B4`, `CBNZ` is `?? ?? ?? B5`, so the flip byte sits at offset 23:
 
 ```
-"11.10|E8 33 40 F9 E0 DF 40 F9 E1 37 40 F9 E2 3B 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
+"11.10-12.1|E8 33 40 F9 E0 DF 40 F9 E1 37 40 F9 E2 3B 40 F9 ?? ?? ?? ?? ?? ?? ?? B4|23|B5"
 ```
 
 ## Step 6: Verify the pattern

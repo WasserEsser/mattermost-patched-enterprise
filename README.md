@@ -26,6 +26,7 @@ Instead of dismissing invalid signatures and erroring out, your patched binary w
 - 9.x
 - 10.x
 - 11.x (including 11.10.0-rc1/rc2)
+- 12.x (12.0.0, 12.0.1, 12.1.0-rc)
 
 ARM64 (aarch64) support covers the same versions except 5.39/6.0, for which no
 ARM64 enterprise builds exist (the first ARM64 build is 6.1). ARM64 versions
@@ -37,7 +38,7 @@ across a wider range:
 - 9.8-11.6
 - 11.7
 - 11.8-11.9
-- 11.10
+- 11.10-12.1
 
 On ARM64 the patch inverts a `cbz` (compare-and-branch-on-zero) into a
 `cbnz` right after the `rsa.VerifyPKCS1v15` call, which is the same
