@@ -10,6 +10,45 @@ set -f
 QUIET=0
 DRY_RUN=0
 BINARY_FILE=""
+METHOD="branch"
+
+# Embedded license public keys (see `--keyswap` below). These are the PEM
+# bodies Mattermost ships in server/channels/utils/license-public-key{,-test}.txt.
+# The trailing newline is deliberately excluded: builds before 8.0 store the
+# PEM without it, so the 450-byte core matches every version.
+VENDOR_KEY_PROD='-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyZmShlU8Z8HdG0IWSZ8r
+tSyzyxrXkJjsFUf0Ke7bm/TLtIggRdqOcUF3XEWqQk5RGD5vuq7Rlg1zZqMEBk8N
+EZeRhkxyaZW8pLjxwuBUOnXfJew31+gsTNdKZzRjrvPumKr3EtkleuoxNdoatu4E
+HrKmR/4Yi71EqAvkhk7ZjQFuF0osSWJMEEGGCSUYQnTEqUzcZSh1BhVpkIkeu8Kk
+1wCtptODixvEujgqVe+SrE3UlZjBmPjC/CL+3cYmufpSNgcEJm2mwsdaXp2OPpfn
+a0v85XL6i9ote2P+fLZ3wX9EoioHzgdgB7arOxY50QRJO7OyCqpKFKv6lRWTXuSt
+hwIDAQAB
+-----END PUBLIC KEY-----'
+
+VENDOR_KEY_TEST='-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwVMaUtQMFtQsRoa2FQd+
+17+acMRMqzPsFTJEix7n+tA8ieCAX0lvNBOjVh8lrt/AUe7B3ZJ0HE6v8xuKj9YA
+zUqV8R27UmnIxf5TCXFWrt+fnzX31yLjqK4Fd6JmiDheUatd1hG+gkScMAPuj+Xw
+4O+V5sMwaVusytVgmehqcVKYrKpDyhBDUEbDRbKKbP4YAHbmNs3AzlGBbQtvc1fi
+0ww7oNKs9cZVcCIeNdwbkXmf8pK5zSXqVsmyPyH3Ue8M6JMNGuPGh1fyHRhFdIiD
+lxd7LBKSh7BTjbRtG9DEt1dyMnYQDgRVAdpururuK/otowCowr6X/Etnk2NNeXcZ
+4QIDAQAB
+-----END PUBLIC KEY-----'
+
+# Public half of keyswap-key.pem, installed by --keyswap. Used when no private
+# key is available locally (e.g. the binary was patched elsewhere). If
+# keyswap-key.pem sits next to this script, its public half is derived from it
+# instead, so the two cannot drift apart.
+OUR_KEY='-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAzsyRgL+IwTzjrk6+ogS6
+e3XbhNYj6ZW6Ohp36UPrGNJ8GfTJEe+u+73PdijUszSuhFqeXrI5b7cVTsw0leO6
++x1JWMqjb3B+WgS3flxtZGAwWrS1GPzdzO0Bn4/7IIzEXoPeUXQ5J777Xah5elX1
+19mumiMceZVLl1xvcGS9jpmWak69/uDwjp0tUNpJHovOTKx5k1wf7zcFCUgk+fPx
+EnSuSe9X7coybU/dr+KupNlqpwK65y0CMNAqlYZccJ5LxT5Efj/Hu+L/6csoHeo4
+sg6jqOUL9DG9f8KHLh1ggPi5UIE6k4Zkjb4CbMyA+2AqcUdWEYexXMH54wVGlkD9
+kwIDAQAB
+-----END PUBLIC KEY-----'
 
 # Help text
 show_help() {
@@ -34,6 +73,19 @@ Options:
   -q, --quiet    Suppress non-error output
   --dry-run      Show what would be patched without making changes
   --list         List supported Mattermost versions and exit
+  --method <m>   How to patch: 'branch' (default) or 'keyswap'
+  --keyswap      Shorthand for --method keyswap
+
+Patch methods:
+  branch    Invert the conditional branch after the signature check, so any
+            signature is accepted. Needs a per-version byte pattern, but works
+            with the license file this repo ships.
+  keyswap   Replace the RSA public key embedded in the binary with the one in
+            keyswap-key.pem. The signature check still runs, so only licenses
+            signed with that private key are accepted - generate them with
+            './sign-license.sh <license.json>'. The vendor keys are identical
+            across all supported versions, so this needs no pattern table and
+            is unaffected by Mattermost code changes.
 
 Exit codes:
   0  Success
@@ -122,6 +174,15 @@ while [[ $# -gt 0 ]]; do
         --list)
             list_versions
             exit 0
+            ;;
+        --keyswap)
+            METHOD="keyswap"
+            shift
+            ;;
+        --method)
+            [ $# -ge 2 ] || { echo "Error: --method requires an argument." >&2; exit 1; }
+            METHOD="$2"
+            shift 2
             ;;
         -*)
             echo "Error: Unknown option: $1" >&2
@@ -240,9 +301,13 @@ probe_binary_version() {
 
 # Setup cleanup for temp files
 TEMP_FILE=""
+FLAT_FILE=""
 cleanup() {
     if [ -n "$TEMP_FILE" ] && [ -f "$TEMP_FILE" ]; then
         rm -f "$TEMP_FILE"
+    fi
+    if [ -n "$FLAT_FILE" ] && [ -f "$FLAT_FILE" ]; then
+        rm -f "$FLAT_FILE"
     fi
 }
 trap cleanup EXIT
@@ -318,6 +383,150 @@ else
     exit 1
 fi
 log "Detected architecture: $ARCH"
+
+# ---------------------------------------------------------------------------
+# keyswap: replace the embedded RSA license public key instead of flipping the
+# branch. The signature check keeps running, so only licenses signed with
+# keyswap-key.pem are accepted.
+# ---------------------------------------------------------------------------
+
+# The PEM keys span many lines, and `grep -F` treats a newline in the pattern as
+# a pattern separator (it would match each PEM line separately). So both the
+# binary and the needle are flattened - 0x0a -> 0x0d - which is a 1:1 byte
+# mapping that keeps offsets valid, and every hit is then re-checked against the
+# raw bytes so a genuine 0x0d cannot produce a false positive.
+FLAT_FILE=""
+
+flatten_0a() {
+    printf '%s' "$1" | tr '\n' '\r'
+}
+
+prepare_flat_copy() {
+    FLAT_FILE=$(mktemp) || {
+        echo "Error: failed to create a temporary file (is TMPDIR writable and not full?)." >&2
+        exit 1
+    }
+    if ! tr '\n' '\r' < "$BINARY_FILE" > "$FLAT_FILE"; then
+        echo "Error: Failed to prepare '$BINARY_FILE' for search." >&2
+        exit 1
+    fi
+}
+
+# Print the byte offsets of every genuine occurrence of a (multi-line) needle.
+# Usage: find_occurrences <needle>
+find_occurrences() {
+    local needle="$1" flat_needle off raw
+    flat_needle=$(flatten_0a "$needle")
+
+    while IFS= read -r off; do
+        [ -n "$off" ] || continue
+        raw=$(dd if="$BINARY_FILE" bs=1 skip="$off" count=${#needle} 2>/dev/null)
+        [ "$raw" = "$needle" ] && printf '%s\n' "$off"
+    done < <(LC_ALL=C grep -aboF -- "$flat_needle" "$FLAT_FILE" 2>/dev/null | cut -d: -f1)
+    return 0
+}
+
+# Replace every occurrence of the vendor key with ours, then read back.
+# Usage: keyswap_replace <vendor_key> <our_key> <label>
+keyswap_replace() {
+    local vendor="$1" ours="$2" label="$3"
+    local off got replaced=0
+
+    while IFS= read -r off; do
+        [ -n "$off" ] || continue
+        if [ "$DRY_RUN" -eq 1 ]; then
+            log "Dry run: would replace $label key at offset 0x$(printf '%x' "$off")"
+            replaced=$((replaced + 1))
+            continue
+        fi
+        if ! printf '%s' "$ours" | dd of="$BINARY_FILE" bs=1 seek="$off" conv=notrunc >/dev/null 2>&1; then
+            echo "Error: Failed to write $label key at offset 0x$(printf '%x' "$off")." >&2
+            exit 9
+        fi
+        got=$(dd if="$BINARY_FILE" bs=1 skip="$off" count=${#ours} 2>/dev/null)
+        if [ "$got" != "$ours" ]; then
+            echo "Error: Read-back mismatch for the $label key at offset 0x$(printf '%x' "$off")." >&2
+            exit 10
+        fi
+        log "Replaced $label key at offset 0x$(printf '%x' "$off")"
+        replaced=$((replaced + 1))
+    done < <(find_occurrences "$vendor")
+
+    printf '%s' "$replaced"
+}
+
+run_keyswap() {
+    local prod_count test_count our_count total
+
+    # Prefer the public half of a local keyswap-key.pem over the baked-in
+    # constant, so patching and signing can never use different key pairs.
+    local key_file
+    key_file="$(dirname "$0")/keyswap-key.pem"
+    if [ -f "$key_file" ] && command -v openssl >/dev/null 2>&1; then
+        local derived
+        derived=$(openssl rsa -in "$key_file" -pubout 2>/dev/null | sed '/^$/d' || true)
+        if [ -n "$derived" ]; then
+            if [ "$derived" != "$OUR_KEY" ]; then
+                log "Using the public key derived from $key_file"
+            fi
+            OUR_KEY="$derived"
+        fi
+    fi
+
+    prepare_flat_copy
+    log "Searching for the embedded license public key"
+
+    prod_count=$(find_occurrences "$VENDOR_KEY_PROD" | wc -l)
+    test_count=$(find_occurrences "$VENDOR_KEY_TEST" | wc -l)
+    our_count=$(find_occurrences "$OUR_KEY" | wc -l)
+
+    if [ "$prod_count" -eq 0 ] && [ "$test_count" -eq 0 ]; then
+        if [ "$our_count" -ge 1 ]; then
+            log "Binary appears to already be patched (our public key is present)."
+            exit 6
+        fi
+        echo "Error: No Mattermost license public key found in '$BINARY_FILE'." >&2
+        echo "This binary may not be a Mattermost server build." >&2
+        exit 7
+    fi
+
+    if [ "$prod_count" -eq 0 ]; then
+        echo "Error: The production license key was not found, but the test key was" >&2
+        echo "($test_count occurrence(s)). Refusing to patch a partially recognised binary." >&2
+        exit 7
+    fi
+
+    log "Production key: $prod_count occurrence(s)"
+    if [ "$test_count" -gt 0 ]; then
+        log "Test key: $test_count occurrence(s)"
+    else
+        log "Test key: not present (pre-8.0 layout)"
+    fi
+
+    total=$((prod_count + test_count))
+
+    keyswap_replace "$VENDOR_KEY_PROD" "$OUR_KEY" "production" >/dev/null
+    if [ "$test_count" -gt 0 ]; then
+        keyswap_replace "$VENDOR_KEY_TEST" "$OUR_KEY" "test" >/dev/null
+    fi
+
+    if [ "$DRY_RUN" -eq 1 ]; then
+        log "Dry run: would replace $total key(s)."
+        log "No changes made to '$BINARY_FILE'."
+        exit 0
+    fi
+
+    log "License public key replaced ($total occurrence(s))."
+    log "Sign a license with: $(dirname "$0")/sign-license.sh <license.json>"
+}
+
+if [ "$METHOD" = "keyswap" ]; then
+    run_keyswap
+    exit 0
+elif [ "$METHOD" != "branch" ]; then
+    echo "Error: Unknown patch method '$METHOD' (expected 'branch' or 'keyswap')." >&2
+    exit 1
+fi
 
 # Prepare a searchable copy of the binary.
 # Fast path: strip newlines (1:1 byte mapping, preserves offsets) so grep -P

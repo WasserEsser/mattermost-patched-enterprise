@@ -284,3 +284,96 @@ jobs:
           name: server-log-${{ matrix.version }}-${{ matrix.arch }}
           path: /tmp/mm-app/mattermost/server.log
           if-no-files-found: ignore
+
+  # The keyswap method is version-independent (the vendor key bytes are the same
+  # in every release), so a few representative versions are enough: one pre-8.0
+  # build (production key only), one 8.0+ build, and the current release on both
+  # architectures.
+  pr-keyswap-matrix:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: "6.6.0",  arch: "amd64" }
+          - { version: "9.7.0",  arch: "amd64" }
+          - { version: "12.0.1", arch: "amd64" }
+          - { version: "12.0.1", arch: "arm64" }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Install patch tooling
+        run: |
+          if ! command -v xxd >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq vim-common
+          fi
+
+      - name: Download and extract Mattermost ${{ matrix.version }} (${{ matrix.arch }})
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/mm-app && mkdir -p /tmp/mm-app
+          curl -sfL -o /tmp/mm.tar.gz \
+            "https://releases.mattermost.com/${{ matrix.version }}/mattermost-enterprise-${{ matrix.version }}-linux-${{ matrix.arch }}.tar.gz"
+          tar -xzf /tmp/mm.tar.gz -C /tmp/mm-app
+
+      - name: Patch the binary (keyswap)
+        run: |
+          set -euo pipefail
+          bash patch.sh --keyswap --quiet /tmp/mm-app/mattermost/bin/mattermost
+          # second run must detect already-patched (exit 6)
+          set +e
+          bash patch.sh --keyswap --quiet /tmp/mm-app/mattermost/bin/mattermost
+          code=$?
+          set -e
+          [ "$code" = "6" ] || { echo "ERROR: expected exit 6 (already patched), got $code"; exit 1; }
+
+      - name: Sign a license with the keyswap key
+        run: |
+          set -euo pipefail
+          # The private key is not committed; CI generates a throwaway pair.
+          # patch.sh derives the public half from keyswap-key.pem when it is
+          # present, so the binary and the signer always agree.
+          openssl genrsa -out keyswap-key.pem 2048
+          bash sign-license.sh -q -o /tmp/keyswap.license license.json
+          [ -s /tmp/keyswap.license ] || { echo "ERROR: sign-license.sh produced no output"; exit 1; }
+          # Re-patch with the generated key: the earlier step used the baked-in
+          # constant, so start from a pristine binary.
+          curl -sfL -o /tmp/mm.tar.gz \
+            "https://releases.mattermost.com/${{ matrix.version }}/mattermost-enterprise-${{ matrix.version }}-linux-${{ matrix.arch }}.tar.gz"
+          rm -rf /tmp/mm-app && mkdir -p /tmp/mm-app
+          tar -xzf /tmp/mm.tar.gz -C /tmp/mm-app
+          bash patch.sh --keyswap --quiet /tmp/mm-app/mattermost/bin/mattermost
+
+      - name: Verify the license is accepted
+        run: |
+          bash .github/license-check.sh /tmp/mm-app/mattermost \
+            "${{ matrix.version }}-${{ matrix.arch }}-keyswap" 18000 /tmp/keyswap.license
+
+      # The whole point of keyswap is that the signature check still runs: a
+      # license signed by someone else must be rejected.
+      - name: Verify a foreign license is rejected
+        run: |
+          set -uo pipefail
+          bash .github/license-check.sh /tmp/mm-app/mattermost \
+            "${{ matrix.version }}-${{ matrix.arch }}-foreign" 18001 \
+            license.mattermost-license && {
+              echo "ERROR: a license not signed with keyswap-key.pem was accepted"
+              exit 1
+            }
+          echo "OK: foreign license rejected, as expected"
+
+      - name: Upload server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keyswap-log-${{ matrix.version }}-${{ matrix.arch }}
+          path: /tmp/mm-app/mattermost/server.log
+          if-no-files-found: ignore
