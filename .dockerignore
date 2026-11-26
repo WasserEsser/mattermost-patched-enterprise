@@ -1,0 +1,22 @@
+# Never send the signing key, the git history, or extracted binaries into the
+# build context. The key is passed at build time via a BuildKit secret mount.
+keyswap-key.pem
+
+.git
+.gitignore
+.github
+
+# Extracted Mattermost binaries and other local artifacts
+mattermost-*
+/arm/
+
+# Local tooling/state
+.opencode/
+.empryo/
+*.i64
+*.id0
+*.id1
+*.id2
+*.nam
+*.til
+*.idb

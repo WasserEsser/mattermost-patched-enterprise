@@ -62,6 +62,10 @@ license JSON, verifying its own signature before writing anything. Use
 `license.json` as a starting point - the `features` block is what actually
 enables enterprise functionality.
 
+For a containerized `keyswap` build, see [keyswap.README.md](keyswap.README.md),
+which walks through key generation, signing, and building the image with
+`keyswap.Dockerfile`.
+
 Two fields matter and must not be empty: `id` and `customer.id`. Both are
 26-character lowercase alphanumeric IDs; the server rejects `""` with
 "Invalid value for id when uploading a license". The shipped `license.json`
@@ -134,7 +138,7 @@ or
 - Create your own docker image by taking the original image and applying the patch
 
 ```
-FROM mattermost/mattermost-enterprise-edition:release-11 AS original
+FROM mattermost/mattermost-enterprise-edition:12.1.0 AS original
 
 FROM alpine:latest AS patcher
 RUN apk add --no-cache bash xxd grep gawk util-linux file
@@ -144,12 +148,16 @@ COPY --from=original /mattermost/bin/mattermost /mattermost
 COPY patch.sh /tmp/patch.sh
 RUN chmod +x /tmp/patch.sh && /tmp/patch.sh --quiet /mattermost
 
-FROM mattermost/mattermost-enterprise-edition:release-11
+FROM mattermost/mattermost-enterprise-edition:12.1.0
 COPY --from=patcher --chown=2000:2000 /mattermost /mattermost/bin/mattermost
 ```
 
 - Either build that image yourself or through CI, tag it, then replace the image in your docker-compose.yml config
 - Or [specify the build](https://docs.docker.com/reference/compose-file/build/) directly inside your docker-compose.yml
+
+The `keyswap` patch method has a dedicated Dockerfile, `keyswap.Dockerfile` (see
+[keyswap.README.md](keyswap.README.md)): it builds the same image but patches
+the embedded RSA key instead of the license-check branch.
 
 ## Step 2
 
