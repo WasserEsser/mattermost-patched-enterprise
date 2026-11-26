@@ -6,7 +6,7 @@
 
 ## Prerequisites
 
-- Docker
+- Docker (with BuildKit, enabled by default since Docker Engine 23)
 - `openssl`
 - `python3` (optional, only needed to generate new license IDs)
 - The files in this repo: `keyswap.Dockerfile`, `patch.sh`, `sign-license.sh`, and `license.json`
@@ -48,12 +48,21 @@ This writes a signed Mattermost license bundle in the format expected by the pat
 
 ## 4) Build your custom Docker image
 
-Use `keyswap.Dockerfile` to patch a clean Mattermost image during build. The private key is used only in the temporary patcher stage and is not copied into the final image.
+Use `keyswap.Dockerfile` to patch a clean Mattermost image during build. The private key is mounted into the temporary patcher stage as a BuildKit secret, so it is never baked into an image layer or the build cache.
 
 Build it:
 
 ```bash
-docker build -t registry.company.com/mattermost/mattermost-enterprise-edition-patched:12.1.0 -f keyswap.Dockerfile .
+docker build \
+  --secret id=keyswap-key,src=./keyswap-key.pem \
+  -t registry.company.com/mattermost/mattermost-enterprise-edition-patched:12.1.0 \
+  -f keyswap.Dockerfile .
+```
+
+Override the base image tag if needed:
+
+```bash
+docker build --build-arg MATTERMOST_IMAGE_TAG=12.2.0 --secret id=keyswap-key,src=./keyswap-key.pem -f keyswap.Dockerfile .
 ```
 
 ## 5) Deploy and upload the license
@@ -70,7 +79,8 @@ mmctl --local license upload ./COMPANY-license.mattermost-license
 
 - `keyswap-key.pem` must stay the same for both patching and signing.
 - If the key is corrupted or lost, generate a new one with `openssl genrsa -out keyswap-key.pem 2048`, rebuild the image, and re-sign the license.
-- Never include the private key in the final production image. Only the public key is embedded in the patched binary.
+- Only the public key is embedded in the patched binary; the private key never enters the image.
+- Do not push the build cache or the intermediate `patcher` stage. With the secret mount the key is no longer in any layer, but treat build-cache exports as sensitive anyway.
 - Official Mattermost licenses will be rejected by a keyswap-patched binary.
 - If the license is signed with a different key than the one embedded in the patched binary, Mattermost will reject it even if the JSON is valid.
 

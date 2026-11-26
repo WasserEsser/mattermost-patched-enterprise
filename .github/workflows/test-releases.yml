@@ -368,3 +368,45 @@ jobs:
           name: keyswap-log-${{ matrix.version }}-${{ matrix.arch }}
           path: /tmp/mm-app/mattermost/server.log
           if-no-files-found: ignore
+
+  # keyswap.Dockerfile is a different build path than the matrix above (which
+  # patches a bare binary). Build the actual image -- with the private key
+  # mounted as a BuildKit secret, not copied in -- and verify the resulting
+  # binary accepts a license signed with that key. This is the artifact users
+  # actually ship, so it must be exercised end-to-end.
+  pr-keyswap-docker-build:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Generate the keyswap key
+        run: |
+          openssl genrsa -out keyswap-key.pem 2048
+          chmod 600 keyswap-key.pem
+
+      - name: Build the keyswap Docker image
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          docker build \
+            --secret id=keyswap-key,src=./keyswap-key.pem \
+            -t mm-keyswap-test:local \
+            -f keyswap.Dockerfile .
+
+      - name: Extract and verify the patched image
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/mm-keyswap && mkdir -p /tmp/mm-keyswap/bin
+          CID=$(docker create mm-keyswap-test:local)
+          docker cp "${CID}:/mattermost/bin/mattermost" /tmp/mm-keyswap/bin/
+          docker cp "${CID}:/mattermost/bin/mmctl" /tmp/mm-keyswap/bin/
+          docker cp "${CID}:/mattermost/i18n" /tmp/mm-keyswap/
+          docker cp "${CID}:/mattermost/templates" /tmp/mm-keyswap/
+          docker cp "${CID}:/mattermost/config" /tmp/mm-keyswap/
+          docker rm "${CID}" >/dev/null
+          bash sign-license.sh -q -o /tmp/keyswap.license license.json
+          bash .github/license-check.sh /tmp/mm-keyswap "12.1.0-amd64-keyswap-docker" 18000 /tmp/keyswap.license
